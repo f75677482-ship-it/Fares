@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>بوابة ربط بوت الملك فارس 👑</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .container { background: white; padding: 30px; border-radius: 15px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); text-align: center; width: 90%; max-width: 400px; }
+        h1 { color: #075e54; margin-bottom: 20px; }
+        input { width: 100%; padding: 12px; margin: 10px 0; border: 2px solid #ddd; border-radius: 8px; box-sizing: border-box; font-size: 16px; text-align: center; }
+        button { background-color: #25d366; color: white; border: none; padding: 12px 25px; border-radius: 8px; cursor: pointer; font-size: 18px; font-weight: bold; width: 100%; transition: 0.3s; }
+        button:hover { background-color: #128c7e; }
+        #result { margin-top: 20px; font-weight: bold; color: #333; padding: 15px; border-radius: 8px; display: none; background: #e7f3ef; border: 1px solid #25d366; }
+        .loading { display: none; color: #666; margin-top: 10px; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>👑 بوت الملك فارس</h1>
+        <p>أدخل رقمك مع مفتاح الدولة (بدون +)</p>
+        <input type="text" id="phoneNumber" placeholder="مثال: 967xxxxxxxxx">
+        <button onclick="getPairingCode()">استخراج كود الربط 🚀</button>
+        <div id="loading" class="loading">⏳ جاري استخراج الكود، يرجى الانتظار...</div>
+        <div id="result"></div>
+    </div>
+
+    <script>
+        async function getPairingCode() {
+            const num = document.getElementById('phoneNumber').value;
+            const resultDiv = document.getElementById('result');
+            const loadingDiv = document.getElementById('loading');
+
+            if (!num) return alert('يرجى إدخال الرقم أولاً');
+
+            resultDiv.style.display = 'none';
+            loadingDiv.style.display = 'block';
+
+            try {
+                const response = await fetch('/api/pairing', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ num: num })
+                });
+                const data = await response.json();
+
+                loadingDiv.style.display = 'none';
+                if (data.success) {
+                    resultDiv.innerHTML = `✅ كود الربط الخاص بك هو:<br><span style="font-size: 24px; color: #075e54;">${data.code}</span>`;
+                    resultDiv.style.display = 'block';
+                } else {
+                    alert('حدث خطأ: ' + (data.error || 'حاول مجدداً'));
+                }
+            } catch (error) {
+                loadingDiv.style.display = 'none';
+                alert('فشل الاتصال بالسيرفر');
+            }
+        }
+    </script>
+</body>
+</html>
