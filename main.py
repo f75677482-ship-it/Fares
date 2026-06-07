@@ -6,7 +6,9 @@
 
 أهم التحسينات في هذه النسخة:
 - تقليل الضغط على الاستضافة المجانية: البوت لا يحمل فيديو المعاينة محلياً لكل طلب.
-- محاولة إرسال روابط الفيديو/الصوت مباشرة عبر تيليجرام أولاً لتخفيف استهلاك الرام والمعالج.
+- محاولة إرسال الصوت مباشرة عبر تيليجرام عند الإمكان لتخفيف استهلاك الرام والمعالج.
+- الفيديوهات تُرسل كوسائط حقيقية من البوت حتى 100MB افتراضياً، وليس كرابط نصي.
+- دعم Local Telegram Bot API اختيارياً لرفع الملفات الكبيرة بثبات أعلى (مثل 100MB وما فوق بحسب إعداد الخادم).
 - دعم تنزيل فيديوهات إنستجرام (Reels / Posts) بدون الاعتماد الإجباري على RapidAPI مع بدائل احتياطية.
 - حصر التحميل المحلي الثقيل داخل Semaphore لتجنب توقف البوت عند الضغط على HD.
 - إعادة تشغيل تلقائية عند حدوث خطأ قاتل أثناء التشغيل.
@@ -125,11 +127,19 @@ WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/telegram").strip() or "/telegram"
 USE_WEBHOOK = os.getenv("USE_WEBHOOK", "").strip().lower() in {"1", "true", "yes", "on"}
 
 REQUEST_TIMEOUT = int(os.getenv("REQUEST_TIMEOUT", "25"))
-DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "60"))
-MAX_DOWNLOAD_MB = int(os.getenv("MAX_DOWNLOAD_MB", "48"))
-MAX_LOCAL_UPLOAD_MB = int(os.getenv("MAX_LOCAL_UPLOAD_MB", "18"))
+DOWNLOAD_TIMEOUT = int(os.getenv("DOWNLOAD_TIMEOUT", "120"))
+MAX_DOWNLOAD_MB = int(os.getenv("MAX_DOWNLOAD_MB", "100"))
+MAX_LOCAL_UPLOAD_MB = int(os.getenv("MAX_LOCAL_UPLOAD_MB", str(MAX_DOWNLOAD_MB)))
 DOWNLOAD_STORE_TTL = int(os.getenv("DOWNLOAD_STORE_TTL", "7200"))
 LOCAL_DOWNLOAD_CONCURRENCY = int(os.getenv("LOCAL_DOWNLOAD_CONCURRENCY", "1"))
+
+TELEGRAM_API_BASE_URL = os.getenv("TELEGRAM_API_BASE_URL", "").strip().rstrip("/")
+TELEGRAM_API_BASE_FILE_URL = os.getenv("TELEGRAM_API_BASE_FILE_URL", "").strip().rstrip("/")
+TELEGRAM_LOCAL_MODE = os.getenv("TELEGRAM_LOCAL_MODE", "").strip().lower() in {"1", "true", "yes", "on"}
+TELEGRAM_SEND_CONNECT_TIMEOUT = int(os.getenv("TELEGRAM_SEND_CONNECT_TIMEOUT", "60"))
+TELEGRAM_SEND_READ_TIMEOUT = int(os.getenv("TELEGRAM_SEND_READ_TIMEOUT", "300"))
+TELEGRAM_SEND_WRITE_TIMEOUT = int(os.getenv("TELEGRAM_SEND_WRITE_TIMEOUT", "300"))
+TELEGRAM_SEND_POOL_TIMEOUT = int(os.getenv("TELEGRAM_SEND_POOL_TIMEOUT", "60"))
 LOW_QUALITY_MAX_WIDTH = int(os.getenv("LOW_QUALITY_MAX_WIDTH", "640"))
 LOW_QUALITY_VIDEO_BITRATE_K = int(os.getenv("LOW_QUALITY_VIDEO_BITRATE_K", "650"))
 LOW_QUALITY_AUDIO_BITRATE_K = int(os.getenv("LOW_QUALITY_AUDIO_BITRATE_K", "96"))
@@ -147,9 +157,10 @@ START_MESSAGE_DEFAULT = (
     "أهلاً بيك 👋\n\n"
     "ابعت رابط تيك توك أو إنستجرام وأنا هجهزهولك فوراً.\n\n"
     "المتاح حالياً:\n"
-    "• TikTok: تحميل فيديو بأعلى جودة متاحة HD\n"
+    "• TikTok: تحميل فيديو بأعلى جودة متاحة HD كوسائط داخل تيليجرام\n"
     "• TikTok: تحميل الملف الصوتي MP3\n"
-    "• Instagram: تحميل الفيديو مباشرة حتى لو لم يتم ضبط RapidAPI\n\n"
+    "• Instagram: تحميل الفيديو كوسائط داخل تيليجرام حتى 100MB افتراضياً\n"
+    "• دعم Local Bot API اختيارياً لو عايز ثبات أعلى مع الملفات الكبيرة\n\n"
     "لو واجهت رابط لا يعمل، ابعته مرة ثانية وسأحاول من جديد."
 )
 
@@ -2032,7 +2043,7 @@ async def deliver_remote_or_local(
 
     target_filename = output_label or ("tiktok_low.mp4" if kind == "low" else "tiktok_hd.mp4")
 
-    # المحاولة الأولى: إرسال مباشر من الرابط لتخفيف الحمل على الاستضافة.
+    # في الصوت نُبقي المحاولة المباشرة من الرابط لأنها لا تخرق طلب المستخدم المتعلق بالفيديو.
     if kind == "mp3":
         try:
             await message.reply_audio(
@@ -2040,46 +2051,26 @@ async def deliver_remote_or_local(
                 caption=title,
                 title=(title[:64] if title else "TikTok Audio"),
                 performer="TikTok",
+                connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
+                read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
+                write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
+                pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
             )
             return
         except Exception as exc:
             logger.warning("Direct remote audio send failed: %s", exc)
-    else:
-        # ملاحظة: تيليجرام أحياناً يرفض روابط Instagram المباشرة بسبب حماية Hotlinking
-        # لذا سنحاول الإرسال المباشر، وإذا فشل سننتقل فوراً للتحميل المحلي
-        if not force_local_processing:
-            try:
-                await message.reply_video(video=direct_url, caption=title, supports_streaming=True)
-                return
-            except Exception as exc:
-                logger.warning("Direct remote video send failed: %s", exc)
-                if not _is_instagram_media_like_url(direct_url):
-                    try:
-                        await message.reply_document(document=direct_url, caption=title, filename=target_filename)
-                        return
-                    except Exception as doc_exc:
-                        logger.warning("Direct remote document send failed: %s", doc_exc)
 
-    # المحاولة الثانية: فحص خفيف للرابط قبل أي تحميل محلي ثقيل.
+    # الفيديو يُرسل كوسائط حقيقية من الملف المحلي، وليس كرابط نصي.
     probe = await asyncio.to_thread(client.probe_media, direct_url)
     if "text/html" in probe.content_type and not _is_instagram_media_like_url(direct_url):
         raise RuntimeError("رابط التنزيل أعاد صفحة HTML بدل ملف وسائط صالح.")
 
     local_limit_bytes = MAX_LOCAL_UPLOAD_MB * 1024 * 1024
     download_limit_bytes = MAX_DOWNLOAD_MB * 1024 * 1024
-    if probe.content_length and probe.content_length > local_limit_bytes and not force_local_processing:
-        await message.reply_text(
-            "الفيديو أكبر من الحد الآمن للرفع المحلي على الاستضافة الحالية، "
-            "لذلك أوقفت التحميل المحلي حتى لا يتوقف البوت.\n\n"
-            f"الحجم التقريبي: {_format_size_mb(probe.content_length)}\n"
-            f"رابط مباشر: {probe.final_url or direct_url}"
-        )
-        return
 
-    if force_local_processing and probe.content_length and probe.content_length > download_limit_bytes:
+    if probe.content_length and probe.content_length > download_limit_bytes:
         raise RuntimeError(
-            "تعذر تجهيز النسخة الأقل دقة لأن الملف الأصلي أكبر من الحد المتاح للتنزيل المحلي على الاستضافة الحالية. "
-            f"الحجم التقريبي: {_format_size_mb(probe.content_length)}"
+            f"حجم الملف التقريبي {_format_size_mb(probe.content_length)} ويتجاوز الحد المضبوط حالياً {MAX_DOWNLOAD_MB}MB."
         )
 
     allow_unknown_size_local = kind != "mp3" and (
@@ -2087,12 +2078,7 @@ async def deliver_remote_or_local(
         or _is_instagram_media_like_url(probe.final_url or direct_url)
     )
     if kind != "mp3" and probe.content_length is None and not allow_unknown_size_local:
-        await message.reply_text(
-            "تعذر التأكد من حجم الفيديو بشكل آمن على الاستضافة الحالية، "
-            "لذلك أرسلت لك الرابط المباشر بدل التحميل المحلي حتى لا يتعطل البوت.\n\n"
-            f"رابط مباشر: {probe.final_url or direct_url}"
-        )
-        return
+        raise RuntimeError("تعذر التأكد أن الرابط يشير إلى ملف فيديو صالح يمكن رفعه كوسائط.")
 
     semaphore = context.bot_data.get("local_download_semaphore")
     if semaphore is None:
@@ -2104,9 +2090,11 @@ async def deliver_remote_or_local(
 
     async with semaphore:
         file_path: Path | None = None
+        upload_path: Path | None = None
         try:
             await context.bot.send_chat_action(chat_id=message.chat_id, action=action)
             file_path = await asyncio.to_thread(client.download_file, probe.final_url or direct_url, suffix)
+
             if kind == "mp3":
                 with file_path.open("rb") as audio_file:
                     await message.reply_audio(
@@ -2114,30 +2102,49 @@ async def deliver_remote_or_local(
                         caption=title,
                         title=(title[:64] if title else "TikTok Audio"),
                         performer="TikTok",
+                        connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
+                        read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
+                        write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
+                        pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
                     )
-            else:
-                upload_path = file_path
-                if force_local_processing:
-                    upload_path = await asyncio.to_thread(client.convert_video_to_low_quality, file_path)
+                return
 
-                try:
-                    with upload_path.open("rb") as video_file:
-                        await message.reply_video(
-                            video=video_file,
-                            caption=title,
-                            supports_streaming=True,
-                        )
-                except Exception:
-                    with upload_path.open("rb") as doc_file:
-                        await message.reply_document(
-                            document=doc_file,
-                            caption=title,
-                            filename=target_filename,
-                        )
-                finally:
-                    if upload_path != file_path and upload_path.exists():
-                        upload_path.unlink(missing_ok=True)
+            upload_path = file_path
+            if force_local_processing:
+                upload_path = await asyncio.to_thread(client.convert_video_to_low_quality, file_path)
+
+            actual_upload_size = upload_path.stat().st_size if upload_path.exists() else 0
+            if actual_upload_size > local_limit_bytes:
+                raise RuntimeError(
+                    f"حجم الملف بعد التجهيز {_format_size_mb(actual_upload_size)} ويتجاوز حد الإرسال الحالي {MAX_LOCAL_UPLOAD_MB}MB."
+                )
+
+            try:
+                with upload_path.open("rb") as video_file:
+                    await message.reply_video(
+                        video=video_file,
+                        caption=title,
+                        supports_streaming=True,
+                        connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
+                        read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
+                        write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
+                        pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
+                    )
+            except Exception as exc:
+                logger.warning("Local video send failed, trying document fallback: %s", exc)
+                with upload_path.open("rb") as doc_file:
+                    await message.reply_document(
+                        document=doc_file,
+                        caption=title,
+                        filename=target_filename,
+                        connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
+                        read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
+                        write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
+                        pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
+                    )
         finally:
+            if upload_path and upload_path != file_path and upload_path.exists():
+                upload_path.unlink(missing_ok=True)
             if file_path and file_path.exists():
                 file_path.unlink(missing_ok=True)
 
@@ -2224,7 +2231,9 @@ async def download_callback_handler(update: Update, context: ContextTypes.DEFAUL
         await query.message.reply_text(
             f"حصل خطأ أثناء تجهيز {label}.\n"
             f"الرسالة: {exc}\n\n"
-            f"رابط بديل مباشر:\n{direct_url}"
+            "لو هدفك إرسال ملفات حتى 100MB كوسائط داخل تيليجرام، تأكد أن المتغيرات "
+            "MAX_DOWNLOAD_MB و MAX_LOCAL_UPLOAD_MB مضبوطة على 100 أو أكثر، "
+            "ويُفضّل تفعيل Local Bot API عبر TELEGRAM_API_BASE_URL و TELEGRAM_API_BASE_FILE_URL عند الحاجة."
         )
 
 
@@ -2394,12 +2403,19 @@ def build_app() -> Application:
         ApplicationBuilder()
         .token(BOT_TOKEN)
         .post_init(post_init)
-        .connect_timeout(30)
-        .read_timeout(30)
-        .write_timeout(30)
-        .pool_timeout(30)
+        .connect_timeout(TELEGRAM_SEND_CONNECT_TIMEOUT)
+        .read_timeout(TELEGRAM_SEND_READ_TIMEOUT)
+        .write_timeout(TELEGRAM_SEND_WRITE_TIMEOUT)
+        .pool_timeout(TELEGRAM_SEND_POOL_TIMEOUT)
         .concurrent_updates(True)
     )
+
+    if TELEGRAM_API_BASE_URL:
+        builder = builder.base_url(TELEGRAM_API_BASE_URL)
+    if TELEGRAM_API_BASE_FILE_URL:
+        builder = builder.base_file_url(TELEGRAM_API_BASE_FILE_URL)
+    if TELEGRAM_LOCAL_MODE or TELEGRAM_API_BASE_URL:
+        builder = builder.local_mode(True)
     app = builder.build()
 
     app.add_error_handler(error_handler)
