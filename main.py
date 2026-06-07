@@ -2036,6 +2036,7 @@ async def deliver_remote_or_local(
     title: str,
     force_local_processing: bool = False,
     output_label: str | None = None,
+    prefer_remote_video_send: bool = False,
 ) -> None:
     message = update.callback_query.message if update.callback_query else update.effective_message
     if not message:
@@ -2059,6 +2060,21 @@ async def deliver_remote_or_local(
             return
         except Exception as exc:
             logger.warning("Direct remote audio send failed: %s", exc)
+
+    if kind != "mp3" and prefer_remote_video_send:
+        try:
+            await message.reply_video(
+                video=direct_url,
+                caption=title,
+                supports_streaming=True,
+                connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
+                read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
+                write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
+                pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
+            )
+            return
+        except Exception as exc:
+            logger.warning("Direct remote video send failed, falling back to local processing: %s", exc)
 
     # الفيديو يُرسل كوسائط حقيقية من الملف المحلي، وليس كرابط نصي.
     probe = await asyncio.to_thread(client.probe_media, direct_url)
@@ -2180,19 +2196,21 @@ async def download_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
     force_local_processing = False
     output_label = None
+    prefer_remote_video_send = False
 
     if kind == "mp3":
         direct_url = payload.get("mp3_url")
         label = "الملف الصوتي"
     elif kind == "low":
         direct_url = (
-            payload.get("no_watermark_url")
-            or payload.get("hd_url")
-            or payload.get("preview_video_url")
+            payload.get("preview_video_url")
             or payload.get("watermark_url")
+            or payload.get("no_watermark_url")
+            or payload.get("hd_url")
         )
         label = "الفيديو الأقل دقة"
         force_local_processing = True
+        prefer_remote_video_send = True
         output_label = "tiktok_low.mp4"
     elif kind == "hd":
         direct_url = payload.get("hd_url") or payload.get("no_watermark_url")
@@ -2217,6 +2235,7 @@ async def download_callback_handler(update: Update, context: ContextTypes.DEFAUL
             title=title,
             force_local_processing=force_local_processing,
             output_label=output_label,
+            prefer_remote_video_send=prefer_remote_video_send,
         )
         try:
             await waiting.delete()
