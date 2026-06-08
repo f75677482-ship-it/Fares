@@ -1190,6 +1190,94 @@ class TikTokIOClient:
                 except Exception:
                     logger.debug("Could not remove temporary Instagram cookie file", exc_info=True)
 
+    def download_instagram_media_via_ytdlp(
+        self,
+        instagram_url: str,
+        *,
+        low_quality: bool = False,
+    ) -> Path:
+        cleaned_url = self._canonical_instagram_url(instagram_url)
+        temp_dir = Path(tempfile.mkdtemp(prefix="instagram_store_"))
+        output_template = str(temp_dir / "media.%(ext)s")
+        cookiefile_path = None
+        persistent_cookiefile = str(Path(INSTAGRAM_COOKIES_FILE).expanduser()) if INSTAGRAM_COOKIES_FILE else ""
+
+        options = {
+            "quiet": True,
+            "no_warnings": True,
+            "noplaylist": False,
+            "extract_flat": False,
+            "socket_timeout": DOWNLOAD_TIMEOUT,
+            "retries": 3,
+            "fragment_retries": 3,
+            "concurrent_fragment_downloads": 1,
+            "outtmpl": output_template,
+            "merge_output_format": "mp4",
+            "restrictfilenames": True,
+            "overwrites": True,
+            "http_headers": self._build_instagram_headers(cleaned_url),
+            "format": (
+                "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
+                "best[height<=720][ext=mp4]/best[height<=720]/best"
+                if low_quality
+                else "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+            ),
+        }
+
+        try:
+            cookiefile_path = self._create_instagram_cookiefile_for_ytdlp()
+            if cookiefile_path:
+                options["cookiefile"] = cookiefile_path
+
+            browser_name = (INSTAGRAM_COOKIES_FROM_BROWSER or "").split(":", 1)[0].strip().lower()
+            if browser_name and not cookiefile_path:
+                options["cookiesfrombrowser"] = (browser_name,)
+
+            with yt_dlp.YoutubeDL(options) as ydl:
+                ydl.download([cleaned_url])
+
+            candidates = sorted(
+                (
+                    path
+                    for path in temp_dir.iterdir()
+                    if path.is_file()
+                    and path.stat().st_size > 0
+                    and not path.name.endswith((".part", ".ytdl"))
+                ),
+                key=lambda path: path.stat().st_size,
+                reverse=True,
+            )
+            if not candidates:
+                raise RuntimeError("yt-dlp لم يُنشئ ملف فيديو صالح من رابط Instagram.")
+
+            downloaded_path = candidates[0]
+            size_bytes = downloaded_path.stat().st_size
+            if size_bytes > MAX_DOWNLOAD_MB * 1024 * 1024:
+                raise RuntimeError(
+                    f"حجم الملف بعد التحميل {_format_size_mb(size_bytes)} ويتجاوز حد التحميل المحلي الحالي {MAX_DOWNLOAD_MB}MB."
+                )
+
+            suffix = downloaded_path.suffix or ".mp4"
+            fd, temp_path = tempfile.mkstemp(prefix="tiktok_store_instagram_", suffix=suffix)
+            os.close(fd)
+            final_path = Path(temp_path)
+            final_path.unlink(missing_ok=True)
+            shutil.move(str(downloaded_path), str(final_path))
+            return final_path
+        finally:
+            try:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+            except Exception:
+                logger.debug("Could not cleanup temporary Instagram download directory", exc_info=True)
+            if cookiefile_path:
+                try:
+                    resolved_temp = str(Path(cookiefile_path).expanduser().resolve())
+                    resolved_persistent = str(Path(persistent_cookiefile).expanduser().resolve()) if persistent_cookiefile else ""
+                    if not resolved_persistent or resolved_temp != resolved_persistent:
+                        Path(cookiefile_path).unlink(missing_ok=True)
+                except Exception:
+                    logger.debug("Could not remove temporary Instagram cookie file", exc_info=True)
+
     def _extract_instagram_meta_content(self, soup: BeautifulSoup, *selectors: str) -> str:
         for selector in selectors:
             node = soup.select_one(selector)
@@ -1511,20 +1599,12 @@ class TikTokIOClient:
             )
         )
 
-        attempts: list[tuple[str, Any]] = []
-        if has_instagram_auth:
-            attempts.append(("yt-dlp-auth", self._fetch_instagram_via_ytdlp))
-
-        attempts.extend(
-            [
-                ("webpage", self._fetch_instagram_via_webpage),
-                ("embed/json", self._fetch_instagram_via_embed_json),
-                ("instafix", self._fetch_instagram_via_instafix),
-            ]
-        )
-
-        if not has_instagram_auth:
-            attempts.append(("yt-dlp", self._fetch_instagram_via_ytdlp))
+        attempts: list[tuple[str, Any]] = [
+            (("yt-dlp-auth" if has_instagram_auth else "yt-dlp"), self._fetch_instagram_via_ytdlp),
+            ("webpage", self._fetch_instagram_via_webpage),
+            ("embed/json", self._fetch_instagram_via_embed_json),
+            ("instafix", self._fetch_instagram_via_instafix),
+        ]
 
         if RAPIDAPI_KEY:
             attempts.append(("rapidapi", self._fetch_instagram_via_rapidapi))
@@ -2034,6 +2114,7 @@ async def deliver_remote_or_local(
     direct_url: str,
     kind: str,
     title: str,
+    source_url: str = "",
     force_local_processing: bool = False,
     output_label: str | None = None,
     prefer_remote_video_send: bool = False,
@@ -2043,6 +2124,7 @@ async def deliver_remote_or_local(
         raise RuntimeError("تعذر الوصول للرسالة الحالية.")
 
     target_filename = output_label or ("tiktok_low.mp4" if kind == "low" else "tiktok_hd.mp4")
+    instagram_source_url = source_url if source_url and "instagram.com" in source_url.lower() else ""
 
     # في الصوت نُبقي المحاولة المباشرة من الرابط لأنها لا تخرق طلب المستخدم المتعلق بالفيديو.
     if kind == "mp3":
@@ -2061,7 +2143,7 @@ async def deliver_remote_or_local(
         except Exception as exc:
             logger.warning("Direct remote audio send failed: %s", exc)
 
-    if kind != "mp3" and prefer_remote_video_send:
+    if kind != "mp3" and prefer_remote_video_send and not instagram_source_url:
         try:
             await message.reply_video(
                 video=direct_url,
@@ -2077,23 +2159,26 @@ async def deliver_remote_or_local(
             logger.warning("Direct remote video send failed, falling back to local processing: %s", exc)
 
     # الفيديو يُرسل كوسائط حقيقية من الملف المحلي، وليس كرابط نصي.
-    probe = await asyncio.to_thread(client.probe_media, direct_url)
-    if "text/html" in probe.content_type and not _is_instagram_media_like_url(direct_url):
-        raise RuntimeError("رابط التنزيل أعاد صفحة HTML بدل ملف وسائط صالح.")
+    probe = MediaProbe(final_url=direct_url, content_type="", content_length=None)
+    if not instagram_source_url:
+        probe = await asyncio.to_thread(client.probe_media, direct_url)
+        if "text/html" in probe.content_type and not _is_instagram_media_like_url(direct_url):
+            raise RuntimeError("رابط التنزيل أعاد صفحة HTML بدل ملف وسائط صالح.")
 
     local_limit_bytes = MAX_LOCAL_UPLOAD_MB * 1024 * 1024
     download_limit_bytes = MAX_DOWNLOAD_MB * 1024 * 1024
 
-    if probe.content_length and probe.content_length > download_limit_bytes:
+    if not instagram_source_url and probe.content_length and probe.content_length > download_limit_bytes:
         raise RuntimeError(
             f"حجم الملف التقريبي {_format_size_mb(probe.content_length)} ويتجاوز الحد المضبوط حالياً {MAX_DOWNLOAD_MB}MB."
         )
 
     allow_unknown_size_local = kind != "mp3" and (
-        probe.content_type.startswith("video/")
+        instagram_source_url
+        or probe.content_type.startswith("video/")
         or _is_instagram_media_like_url(probe.final_url or direct_url)
     )
-    if kind != "mp3" and probe.content_length is None and not allow_unknown_size_local:
+    if kind != "mp3" and not instagram_source_url and probe.content_length is None and not allow_unknown_size_local:
         raise RuntimeError("تعذر التأكد أن الرابط يشير إلى ملف فيديو صالح يمكن رفعه كوسائط.")
 
     semaphore = context.bot_data.get("local_download_semaphore")
@@ -2109,7 +2194,14 @@ async def deliver_remote_or_local(
         upload_path: Path | None = None
         try:
             await context.bot.send_chat_action(chat_id=message.chat_id, action=action)
-            file_path = await asyncio.to_thread(client.download_file, probe.final_url or direct_url, suffix)
+            if instagram_source_url and kind != "mp3":
+                file_path = await asyncio.to_thread(
+                    client.download_instagram_media_via_ytdlp,
+                    instagram_source_url,
+                    low_quality=force_local_processing,
+                )
+            else:
+                file_path = await asyncio.to_thread(client.download_file, probe.final_url or direct_url, suffix)
 
             if kind == "mp3":
                 with file_path.open("rb") as audio_file:
@@ -2126,14 +2218,18 @@ async def deliver_remote_or_local(
                 return
 
             upload_path = file_path
-            if force_local_processing:
+            if force_local_processing and not instagram_source_url:
                 upload_path = await asyncio.to_thread(client.convert_video_to_low_quality, file_path)
 
             actual_upload_size = upload_path.stat().st_size if upload_path.exists() else 0
-            if actual_upload_size > local_limit_bytes:
-                raise RuntimeError(
-                    f"حجم الملف بعد التجهيز {_format_size_mb(actual_upload_size)} ويتجاوز حد الإرسال الحالي {MAX_LOCAL_UPLOAD_MB}MB."
-                )
+            if actual_upload_size > local_limit_bytes and kind != "mp3":
+                if upload_path == file_path:
+                    upload_path = await asyncio.to_thread(client.convert_video_to_low_quality, file_path)
+                    actual_upload_size = upload_path.stat().st_size if upload_path.exists() else 0
+                if actual_upload_size > local_limit_bytes:
+                    raise RuntimeError(
+                        f"حجم الملف بعد التجهيز {_format_size_mb(actual_upload_size)} ويتجاوز حد الإرسال الحالي {MAX_LOCAL_UPLOAD_MB}MB."
+                    )
 
             try:
                 with upload_path.open("rb") as video_file:
@@ -2233,6 +2329,7 @@ async def download_callback_handler(update: Update, context: ContextTypes.DEFAUL
             direct_url=direct_url,
             kind=kind,
             title=title,
+            source_url=payload.get("source_url") or "",
             force_local_processing=force_local_processing,
             output_label=output_label,
             prefer_remote_video_send=prefer_remote_video_send,
@@ -2248,11 +2345,7 @@ async def download_callback_handler(update: Update, context: ContextTypes.DEFAUL
         except Exception:
             pass
         await query.message.reply_text(
-            f"حصل خطأ أثناء تجهيز {label}.\n"
-            f"الرسالة: {exc}\n\n"
-            "لو هدفك إرسال ملفات حتى 100MB كوسائط داخل تيليجرام، تأكد أن المتغيرات "
-            "MAX_DOWNLOAD_MB و MAX_LOCAL_UPLOAD_MB مضبوطة على 100 أو أكثر، "
-            "ويُفضّل تفعيل Local Bot API عبر TELEGRAM_API_BASE_URL و TELEGRAM_API_BASE_FILE_URL عند الحاجة."
+            f"تعذر إرسال {label} حالياً. أعد المحاولة بعد لحظات، وإذا تكرر الأمر سيتم تسجيله للمراجعة تلقائياً."
         )
 
 
