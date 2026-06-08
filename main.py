@@ -71,7 +71,7 @@ import requests
 import yt_dlp
 from bs4 import BeautifulSoup
 from requests.adapters import HTTPAdapter
-from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, InputFile, Update
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, Forbidden, NetworkError, TimedOut
 from telegram.ext import (
@@ -1217,10 +1217,10 @@ class TikTokIOClient:
             "overwrites": True,
             "http_headers": self._build_instagram_headers(cleaned_url),
             "format": (
-                "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/"
-                "best[height<=720][ext=mp4]/best[height<=720]/best"
+                "best[height<=720][ext=mp4]/best[height<=720]/"
+                "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best"
                 if low_quality
-                else "bestvideo[ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best"
+                else "best[ext=mp4]/best/bestvideo[ext=mp4]+bestaudio[ext=m4a]/best"
             ),
         }
 
@@ -2256,29 +2256,106 @@ def _is_instagram_media_like_url(url: str) -> bool:
     )
 
 
+def _extract_video_send_metadata(video_path: Path) -> dict[str, int]:
+    ffprobe_path = shutil.which("ffprobe")
+    if not ffprobe_path or not video_path.exists():
+        return {}
+
+    command = [
+        ffprobe_path,
+        "-v",
+        "error",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
+        str(video_path),
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0 or not completed.stdout.strip():
+            return {}
+        payload = json.loads(completed.stdout)
+    except Exception:
+        return {}
+
+    metadata: dict[str, int] = {}
+    streams = payload.get("streams") or []
+    video_stream = next((stream for stream in streams if stream.get("codec_type") == "video"), None)
+    if isinstance(video_stream, dict):
+        width = video_stream.get("width")
+        height = video_stream.get("height")
+        duration = video_stream.get("duration")
+        if isinstance(width, int) and width > 0:
+            metadata["width"] = width
+        if isinstance(height, int) and height > 0:
+            metadata["height"] = height
+        try:
+            duration_value = int(round(float(duration))) if duration not in (None, "") else 0
+        except Exception:
+            duration_value = 0
+        if duration_value > 0:
+            metadata["duration"] = duration_value
+
+    if "duration" not in metadata:
+        format_section = payload.get("format") if isinstance(payload, dict) else {}
+        try:
+            format_duration = int(round(float((format_section or {}).get("duration") or 0)))
+        except Exception:
+            format_duration = 0
+        if format_duration > 0:
+            metadata["duration"] = format_duration
+
+    return metadata
+
+
 async def _reply_video_from_path(message, video_path: Path, title: str) -> None:
     last_error: Exception | None = None
+    video_kwargs = _extract_video_send_metadata(video_path)
+
     for supports_streaming in (True, False):
-        try:
-            with video_path.open("rb") as video_file:
-                await message.reply_video(
-                    video=video_file,
-                    caption=title,
-                    supports_streaming=supports_streaming,
-                    connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
-                    read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
-                    write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
-                    pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
+        for attempt in range(1, 3):
+            try:
+                with video_path.open("rb") as video_file:
+                    await message.reply_video(
+                        video=InputFile(video_file, filename=video_path.name),
+                        caption=title,
+                        supports_streaming=supports_streaming,
+                        connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
+                        read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
+                        write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
+                        pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
+                        **video_kwargs,
+                    )
+                return
+            except (TimedOut, NetworkError) as exc:
+                last_error = exc
+                logger.warning(
+                    "Temporary video send failure | file=%s | supports_streaming=%s | attempt=%s | error=%s",
+                    video_path.name,
+                    supports_streaming,
+                    attempt,
+                    exc,
                 )
-            return
-        except Exception as exc:
-            last_error = exc
-            logger.warning(
-                "Video send attempt failed | file=%s | supports_streaming=%s | error=%s",
-                video_path.name,
-                supports_streaming,
-                exc,
-            )
+                if attempt < 2:
+                    await asyncio.sleep(min(2, attempt))
+                    continue
+            except Exception as exc:
+                last_error = exc
+                logger.warning(
+                    "Video send attempt failed | file=%s | supports_streaming=%s | attempt=%s | error=%s",
+                    video_path.name,
+                    supports_streaming,
+                    attempt,
+                    exc,
+                )
+                break
     raise RuntimeError(f"فشل إرسال الفيديو كوسائط عبر تيليجرام: {last_error}")
 
 
@@ -2370,11 +2447,23 @@ async def deliver_remote_or_local(
         try:
             await context.bot.send_chat_action(chat_id=message.chat_id, action=action)
             if instagram_source_url and kind != "mp3":
-                file_path = await asyncio.to_thread(
-                    client.download_instagram_media_via_ytdlp,
-                    instagram_source_url,
-                    low_quality=force_local_processing,
-                )
+                try:
+                    file_path = await asyncio.to_thread(
+                        client.download_instagram_media_via_ytdlp,
+                        instagram_source_url,
+                        low_quality=force_local_processing,
+                    )
+                except Exception as instagram_download_error:
+                    logger.warning(
+                        "Instagram yt-dlp download failed, falling back to direct media URL | source=%s | direct=%s | error=%s",
+                        instagram_source_url,
+                        direct_url,
+                        instagram_download_error,
+                    )
+                    fallback_media_url = probe.final_url or direct_url
+                    if not _is_instagram_media_like_url(fallback_media_url):
+                        raise
+                    file_path = await asyncio.to_thread(client.download_file, fallback_media_url, suffix)
             else:
                 file_path = await asyncio.to_thread(client.download_file, probe.final_url or direct_url, suffix)
 
@@ -2393,8 +2482,16 @@ async def deliver_remote_or_local(
                 return
 
             upload_path = file_path
-            if force_local_processing and not instagram_source_url:
-                upload_path = await asyncio.to_thread(client.convert_video_to_low_quality, file_path)
+            if force_local_processing:
+                try:
+                    upload_path = await asyncio.to_thread(client.convert_video_to_low_quality, file_path)
+                except Exception as exc:
+                    logger.warning(
+                        "Low-quality conversion failed, continuing with original video | file=%s | error=%s",
+                        file_path.name if file_path else "unknown",
+                        exc,
+                    )
+                    upload_path = file_path
 
             actual_upload_size = upload_path.stat().st_size if upload_path.exists() else 0
             if actual_upload_size > local_limit_bytes and kind != "mp3":
