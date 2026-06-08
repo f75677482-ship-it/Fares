@@ -1673,6 +1673,160 @@ class TikTokIOClient:
             raise
 
 
+    def _run_ffmpeg(self, command: list[str], error_prefix: str, output_path: Path) -> Path:
+        completed = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0 or not output_path.exists() or output_path.stat().st_size == 0:
+            output_path.unlink(missing_ok=True)
+            details = (completed.stderr or completed.stdout or "").strip()
+            details = details[-700:] if details else "لا توجد تفاصيل إضافية."
+            raise RuntimeError(f"{error_prefix} {details}")
+        return output_path
+
+    def _is_video_telegram_compatible(self, video_path: Path) -> bool:
+        ffprobe_path = shutil.which("ffprobe")
+        if not ffprobe_path or not video_path.exists():
+            return False
+
+        command = [
+            ffprobe_path,
+            "-v",
+            "error",
+            "-print_format",
+            "json",
+            "-show_streams",
+            str(video_path),
+        ]
+        try:
+            completed = subprocess.run(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                check=False,
+            )
+            if completed.returncode != 0 or not completed.stdout.strip():
+                return False
+            payload = json.loads(completed.stdout)
+        except Exception:
+            return False
+
+        streams = payload.get("streams") or []
+        video_stream = next((s for s in streams if s.get("codec_type") == "video"), None)
+        if not video_stream:
+            return False
+
+        video_codec = self._safe_string(video_stream.get("codec_name")).lower()
+        pix_fmt = self._safe_string(video_stream.get("pix_fmt")).lower()
+        if video_codec != "h264":
+            return False
+        if pix_fmt and pix_fmt != "yuv420p":
+            return False
+
+        audio_stream = next((s for s in streams if s.get("codec_type") == "audio"), None)
+        if audio_stream:
+            audio_codec = self._safe_string(audio_stream.get("codec_name")).lower()
+            if audio_codec not in {"aac", "mp3"}:
+                return False
+
+        return True
+
+    def normalize_video_for_telegram(self, input_path: Path) -> Path:
+        if not input_path.exists():
+            raise RuntimeError("ملف الفيديو المؤقت غير موجود.")
+
+        ffmpeg_path = shutil.which("ffmpeg")
+        if not ffmpeg_path:
+            return input_path
+
+        fd, temp_path = tempfile.mkstemp(prefix="tiktok_store_tg_", suffix=".mp4")
+        os.close(fd)
+        output_path = Path(temp_path)
+        output_path.unlink(missing_ok=True)
+
+        remux_command = [
+            ffmpeg_path,
+            "-y",
+            "-i",
+            str(input_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-c:v",
+            "copy",
+            "-c:a",
+            "copy",
+            "-movflags",
+            "+faststart",
+            str(output_path),
+        ]
+
+        try:
+            remuxed_path = self._run_ffmpeg(remux_command, "فشل تجهيز الفيديو المتوافق مع تيليجرام.", output_path)
+            if self._is_video_telegram_compatible(remuxed_path):
+                return remuxed_path
+            remuxed_path.unlink(missing_ok=True)
+        except Exception:
+            output_path.unlink(missing_ok=True)
+
+        fd, temp_path = tempfile.mkstemp(prefix="tiktok_store_tg_reencode_", suffix=".mp4")
+        os.close(fd)
+        output_path = Path(temp_path)
+        output_path.unlink(missing_ok=True)
+
+        transcode_command = [
+            ffmpeg_path,
+            "-y",
+            "-i",
+            str(input_path),
+            "-map",
+            "0:v:0",
+            "-map",
+            "0:a?",
+            "-vf",
+            "scale='trunc(iw/2)*2':'trunc(ih/2)*2'",
+            "-c:v",
+            "libx264",
+            "-preset",
+            "veryfast",
+            "-crf",
+            "23",
+            "-pix_fmt",
+            "yuv420p",
+            "-profile:v",
+            "high",
+            "-level",
+            "4.1",
+            "-c:a",
+            "aac",
+            "-b:a",
+            f"{max(64, LOW_QUALITY_AUDIO_BITRATE_K)}k",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
+            "-movflags",
+            "+faststart",
+            "-max_muxing_queue_size",
+            "4096",
+            str(output_path),
+        ]
+        transcoded_path = self._run_ffmpeg(
+            transcode_command,
+            "فشل تحويل الفيديو لصيغة متوافقة مع تيليجرام.",
+            output_path,
+        )
+        if not self._is_video_telegram_compatible(transcoded_path):
+            transcoded_path.unlink(missing_ok=True)
+            raise RuntimeError("تم تحويل الفيديو لكن الناتج النهائي ما زال غير متوافق مع إرسال الفيديو داخل تيليجرام.")
+        return transcoded_path
+
     def convert_video_to_low_quality(self, input_path: Path) -> Path:
         if not input_path.exists():
             raise RuntimeError("ملف الفيديو المؤقت غير موجود.")
@@ -1684,8 +1838,12 @@ class TikTokIOClient:
         fd, temp_path = tempfile.mkstemp(prefix="tiktok_store_low_", suffix=".mp4")
         os.close(fd)
         output_path = Path(temp_path)
+        output_path.unlink(missing_ok=True)
 
-        scale_filter = f"scale='min({max(240, LOW_QUALITY_MAX_WIDTH)},iw)':-2,fps={max(12, LOW_QUALITY_FPS)}"
+        scale_filter = (
+            f"scale='trunc(min({max(240, LOW_QUALITY_MAX_WIDTH)},iw)/2)*2':-2,"
+            f"fps={max(12, LOW_QUALITY_FPS)}"
+        )
         command = [
             ffmpeg_path,
             "-y",
@@ -1713,25 +1871,16 @@ class TikTokIOClient:
             "aac",
             "-b:a",
             f"{max(48, LOW_QUALITY_AUDIO_BITRATE_K)}k",
+            "-ac",
+            "2",
+            "-ar",
+            "44100",
             "-movflags",
             "+faststart",
             str(output_path),
         ]
 
-        completed = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            check=False,
-        )
-        if completed.returncode != 0 or not output_path.exists() or output_path.stat().st_size == 0:
-            output_path.unlink(missing_ok=True)
-            details = (completed.stderr or completed.stdout or "").strip()
-            details = details[-700:] if details else "لا توجد تفاصيل إضافية."
-            raise RuntimeError(f"فشل ضغط الفيديو للجودة الأقل. {details}")
-
-        return output_path
+        return self._run_ffmpeg(command, "فشل ضغط الفيديو للجودة الأقل.", output_path)
 
 
 client = TikTokIOClient()
@@ -2107,6 +2256,32 @@ def _is_instagram_media_like_url(url: str) -> bool:
     )
 
 
+async def _reply_video_from_path(message, video_path: Path, title: str) -> None:
+    last_error: Exception | None = None
+    for supports_streaming in (True, False):
+        try:
+            with video_path.open("rb") as video_file:
+                await message.reply_video(
+                    video=video_file,
+                    caption=title,
+                    supports_streaming=supports_streaming,
+                    connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
+                    read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
+                    write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
+                    pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
+                )
+            return
+        except Exception as exc:
+            last_error = exc
+            logger.warning(
+                "Video send attempt failed | file=%s | supports_streaming=%s | error=%s",
+                video_path.name,
+                supports_streaming,
+                exc,
+            )
+    raise RuntimeError(f"فشل إرسال الفيديو كوسائط عبر تيليجرام: {last_error}")
+
+
 async def deliver_remote_or_local(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE,
@@ -2231,30 +2406,58 @@ async def deliver_remote_or_local(
                         f"حجم الملف بعد التجهيز {_format_size_mb(actual_upload_size)} ويتجاوز حد الإرسال الحالي {MAX_LOCAL_UPLOAD_MB}MB."
                     )
 
-            try:
-                with upload_path.open("rb") as video_file:
-                    await message.reply_video(
-                        video=video_file,
-                        caption=title,
-                        supports_streaming=True,
-                        connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
-                        read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
-                        write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
-                        pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
-                    )
-            except Exception as exc:
-                logger.warning("Local video send failed, trying document fallback: %s", exc)
-                with upload_path.open("rb") as doc_file:
-                    await message.reply_document(
-                        document=doc_file,
-                        caption=title,
-                        filename=target_filename,
-                        connect_timeout=TELEGRAM_SEND_CONNECT_TIMEOUT,
-                        read_timeout=TELEGRAM_SEND_READ_TIMEOUT,
-                        write_timeout=TELEGRAM_SEND_WRITE_TIMEOUT,
-                        pool_timeout=TELEGRAM_SEND_POOL_TIMEOUT,
-                    )
+            prepared_paths: list[Path] = [upload_path]
+            generated_paths: list[Path] = []
+
+            needs_telegram_normalization = bool(
+                instagram_source_url
+                or force_local_processing
+                or upload_path.suffix.lower() not in {".mp4", ".m4v"}
+            )
+            if needs_telegram_normalization:
+                normalized_path = await asyncio.to_thread(client.normalize_video_for_telegram, upload_path)
+                if normalized_path != upload_path and normalized_path.exists():
+                    generated_paths.append(normalized_path)
+                    prepared_paths.insert(0, normalized_path)
+
+            seen_paths: set[str] = set()
+            send_errors: list[str] = []
+
+            for candidate_path in prepared_paths:
+                candidate_key = str(candidate_path.resolve()) if candidate_path.exists() else str(candidate_path)
+                if candidate_key in seen_paths:
+                    continue
+                seen_paths.add(candidate_key)
+
+                candidate_size = candidate_path.stat().st_size if candidate_path.exists() else 0
+                if candidate_size > local_limit_bytes:
+                    compressed_path = await asyncio.to_thread(client.convert_video_to_low_quality, candidate_path)
+                    if compressed_path.exists():
+                        generated_paths.append(compressed_path)
+                        prepared_paths.append(compressed_path)
+                    continue
+
+                try:
+                    await _reply_video_from_path(message, candidate_path, title)
+                    return
+                except Exception as exc:
+                    send_errors.append(f"{candidate_path.name}: {exc}")
+                    logger.warning("Video media send attempt failed for %s: %s", candidate_path.name, exc)
+                    if candidate_path == upload_path:
+                        compressed_path = await asyncio.to_thread(client.convert_video_to_low_quality, candidate_path)
+                        if compressed_path.exists():
+                            generated_paths.append(compressed_path)
+                            prepared_paths.append(compressed_path)
+
+            joined_errors = " | ".join(send_errors) if send_errors else "لا توجد تفاصيل إضافية."
+            raise RuntimeError(f"فشل إرسال الفيديو كوسائط بعد عدة محاولات: {joined_errors}")
         finally:
+            for extra_path in locals().get("generated_paths", []):
+                try:
+                    if extra_path and extra_path.exists() and extra_path not in {upload_path, file_path}:
+                        extra_path.unlink(missing_ok=True)
+                except Exception:
+                    logger.debug("Could not cleanup generated temporary video file", exc_info=True)
             if upload_path and upload_path != file_path and upload_path.exists():
                 upload_path.unlink(missing_ok=True)
             if file_path and file_path.exists():
