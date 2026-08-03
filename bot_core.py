@@ -72,7 +72,7 @@ START_MESSAGE_AUTO_LINE_PATTERNS = [
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الأساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الاساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
 ]
-DEFAULT_AUTO_REPLY_CHANNEL_URL = ""
+DEFAULT_AUTO_REPLY_CHANNEL_URL = "https://whatsapp-pairing-api-production-639f.up.railway.app/"
 DEFAULT_CONTACT_NUMBER = "967773987296"
 DEFAULT_SITE_BRAND_NAME = "بوت الربط بايثون"
 DEFAULT_SITE_FOOTER = "بوت الربط بايثون"
@@ -86,15 +86,7 @@ DEFAULT_AUTO_REPLY_MESSAGE_TEMPLATE = (
     f"📞 رقم التواصل: {DEFAULT_CONTACT_NUMBER}"
 )
 DEFAULT_WHATSAPP_ALIVE_MESSAGE = "✅ *Golden Queen is active now*\n\n👑 *Owner:* Golden Queen\n🤖 *Status:* Ready"
-DEFAULT_WHATSAPP_BOT_MESSAGE = (
-    "🔔 *تم إنشاء حالة ربط جديدة*\n\n"
-    "📲 *كود الاقتران:* {code}\n\n"
-    "1️⃣ افتح واتساب.\n"
-    "2️⃣ ادخل إلى الأجهزة المرتبطة.\n"
-    "3️⃣ اختر ربط جهاز.\n"
-    "4️⃣ أدخل الكود أعلاه فورًا.\n\n"
-    "✅ بعد إدخال الكود سيكتمل الربط وستصلك رسالة تفعيل على نفس الرقم تلقائيًا."
-)
+DEFAULT_WHATSAPP_BOT_MESSAGE = '✅ *كود الاقتران الجديد*\n\n🔑 *الكود:* {code}\n\n📱 *طريقة الربط:*\n1️⃣ افتح واتساب.\n2️⃣ ادخل إلى الأجهزة المرتبطة.\n3️⃣ اختر ربط جهاز.\n4️⃣ أدخل الكود أعلاه مباشرة باعلى سرعة (يفضل خلال 30 ثانية من استخراج الكود).\n\n⚠️ *هام جدًا:* استخدم آخر كود فقط. إذا ظهر *جار تسجيل الدخول* لمدة تزيد عن دقيقة واحدة أو توقف لمتصفح واتساب، اطلب كودًا جديدًا فورًا وأعد المحاولة فوراً، لا تنسخ قديما.'
 DEVELOPER_CONTACT_MESSAGE = "التواصل معى المطور على الواتس من خلال الرقم التالي\n967773987296\nاو لتواصل مع المطور من خلال التليجرام عبر اليوزر التالي\n@P_n_ij"
 DEFAULT_WHATSAPP_SETTINGS_MESSAGE = "⚙️ رسالة الإعدادات"
 LEGACY_WHATSAPP_BOT_MESSAGES = ('👑 *GQUEEN-MINI VERIFICATION*\n\n🔑 Your Link Code: *{code}*\n\n----------------------------\n📱 *How to Link Your Device:*\n\n1️⃣ Open *WhatsApp* on your phone.\n2️⃣ Tap *Menu* (⋮) or *Settings* (⚙️).\n3️⃣ Select *Linked Devices*.\n4️⃣ Tap *Link a Device*.\n5️⃣ Point your phone to the screen to scan the QR or use this code if prompted.',)
@@ -1749,25 +1741,6 @@ def get_user_primary_whatsapp_record(user_id: int) -> tuple[str, dict[str, Any]]
     return "", {}
 
 
-def get_user_locked_number(user_id: int, requested_number: str = "") -> str:
-    normalized_requested = normalize_phone_number(requested_number)
-    for number, _record in get_all_user_whatsapp_records(user_id):
-        if not normalized_requested or number != normalized_requested:
-            return number
-    return ""
-
-
-def build_single_number_lock_message(user_id: int, requested_number: str = "") -> str:
-    locked_number = get_user_locked_number(user_id, requested_number)
-    if not locked_number:
-        return ""
-    return (
-        f"🔒 حسابك مربوط أو قيد الربط بالفعل على الرقم {locked_number}.\n"
-        "❌ مسموح لكل مستخدم رقم واحد فقط داخل البوت.\n"
-        "🗑️ احذف الرقم الحالي أولاً من زر إلغاء الربط، وبعدها اربط رقمًا آخر."
-    )
-
-
 def build_user_linked_summary(user_id: Optional[int]) -> str:
     if not user_id:
         return "📱 لا يوجد رقم مربوط حالياً."
@@ -3223,40 +3196,6 @@ async def send_whatsapp_message(chat_id: str, message: str) -> dict[str, Any]:
     return await asyncio.to_thread(send_whatsapp_message_sync, chat_id, message)
 
 
-async def send_pairing_whatsapp_notifications(number: str, code: str) -> bool:
-    normalized_number = normalize_phone_number(number)
-    normalized_code = normalize_pair_code(code)
-    if not normalized_number or not normalized_code or not get_green_api_send_message_url():
-        return False
-
-    messages = [
-        f"🔔 تم إنشاء حالة ربط جديدة لهذا الرقم من داخل البوت.\n📲 كود الاقتران الجاهز: {normalized_code}",
-        render_whatsapp_pair_code_message(normalized_code),
-    ]
-
-    delivered = False
-    for message in messages:
-        for attempt in range(3):
-            try:
-                await send_whatsapp_message(normalized_number, message)
-                delivered = True
-                break
-            except Exception:
-                if attempt < 2:
-                    await asyncio.sleep(1.0 + attempt)
-                else:
-                    logger.exception("Failed to deliver pairing WhatsApp notification to %s", normalized_number)
-    if delivered:
-        update_number_records(normalized_number, {
-            "last_pair_code": normalized_code,
-            "whatsapp_pair_code_sent": True,
-            "whatsapp_pair_code_sent_at": datetime.now(timezone.utc).isoformat(),
-            "whatsapp_pairing_alert_sent": True,
-            "whatsapp_pairing_alert_sent_at": datetime.now(timezone.utc).isoformat(),
-        })
-    return delivered
-
-
 def get_green_api_send_file_url() -> str:
     if GREEN_API_ID_INSTANCE and GREEN_API_TOKEN_INSTANCE:
         return (
@@ -3307,7 +3246,8 @@ def build_linked_number_private_message(number: str = "", site_password: str = "
         lines.append(f"🔐 كلمة سر إعدادات الرقم: {site_password}")
     else:
         lines.append("⏳ جارِ تجهيز كلمة سر إعدادات الرقم، وستصلك تلقائيًا عند توفرها.")
-    lines.append("🤖 إدارة الرقم وربطه تتم من داخل البوت فقط.")
+    if bot_link:
+        lines.append(f"🤖 إدارة الرقم من داخل البوت: {bot_link}")
     lines.append("😀 هذه الرسالة خاصة بهذا الرقم فقط.")
     return "\n".join(lines)
 
@@ -4153,8 +4093,9 @@ async def notify_successful_pairing(number: str, explicit_user_id: Optional[int]
             logger.exception("Failed to sync emoji after successful pairing for user %s", user_id)
 
     site_password = normalize_site_password(linked_payload.get("site_password"))
+    bot_link = str(BOT_LINK_CACHE.get("url") or "").strip()
     try:
-        await deliver_linked_number_private_bundle(normalized_number, site_password, "")
+        await deliver_linked_number_private_bundle(normalized_number, site_password, bot_link)
         linked_payload["whatsapp_pairing_instruction_sent"] = True
         linked_payload["whatsapp_pairing_instruction_sent_at"] = datetime.now(timezone.utc).isoformat()
         linked_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -5042,16 +4983,6 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if query.data == "pair_code":
-        user = update.effective_user
-        if user:
-            locked_message = build_single_number_lock_message(user.id)
-            if locked_message:
-                context.user_data["awaiting_pair_number"] = False
-                await query.message.reply_text(
-                    locked_message,
-                    reply_markup=build_main_keyboard(admin=is_admin(update)),
-                )
-                return
         context.user_data["awaiting_pair_number"] = False
         context.user_data.pop("awaiting_user_emoji", None)
         context.user_data.pop("awaiting_emoji_credentials", None)
@@ -5846,16 +5777,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(pair_texts["invalid_number"])
         return
 
-    if update.effective_user:
-        locked_message = build_single_number_lock_message(update.effective_user.id, number)
-        if locked_message:
-            context.user_data["awaiting_pair_number"] = False
-            await update.message.reply_text(
-                locked_message,
-                reply_markup=build_main_keyboard(admin=is_admin(update)),
-            )
-            return
-
     context.user_data["awaiting_pair_number"] = False
     BOT_STATS["pair_requests"] += 1
 
@@ -5868,8 +5789,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user:
             register_pending_pairing(update.effective_user, number, code, site_metadata=pair_result)
         try:
-            if code:
-                await send_pairing_whatsapp_notifications(number, code)
+            if code and get_green_api_send_message_url():
+                await send_whatsapp_message(number, render_whatsapp_pair_code_message(code))
+                update_number_records(number, {
+                    "last_pair_code": code,
+                    "whatsapp_pair_code_sent": True,
+                    "whatsapp_pair_code_sent_at": datetime.now(timezone.utc).isoformat(),
+                })
         except Exception:
             logger.exception("Failed to send pair code notification to WhatsApp number %s", number)
         await update.message.reply_text(
@@ -6267,14 +6193,11 @@ function clearReconnect(phone) {
   }
 }
 
-async function destroySocket(phone, { logout = false } = {}) {
+async function destroySocket(phone) {
   const normalized = normalizePhone(phone);
   const existing = sockets.get(normalized);
   if (!existing) return;
   sockets.delete(normalized);
-  if (logout) {
-    try { await existing.logout?.(); } catch (_) {}
-  }
   try { existing.ws?.close?.(); } catch (_) {}
   try { existing.end?.(); } catch (_) {}
 }
@@ -6284,7 +6207,7 @@ async function purgeSession(phone, { removeRemote = true } = {}) {
   if (!normalized) return false;
   pairingRequests.delete(normalized);
   clearReconnect(normalized);
-  await destroySocket(normalized, { logout: true });
+  await destroySocket(normalized);
   await removeSessionDir(normalized);
   if (removeRemote) {
     await deleteStoredSession(normalized);
@@ -6502,7 +6425,7 @@ async function createSocket(phone, options = {}) {
           return;
         }
         if (restartRequired) {
-          await destroySocket(normalized, { logout: true });
+          await destroySocket(normalized);
         }
         scheduleReconnect(normalized);
       }
@@ -6861,28 +6784,972 @@ module.exports = {
 };
 '''
 
-EMBEDDED_SERVER_JS = ''
+EMBEDDED_SERVER_JS = r'''const express = require('express');
+const fs = require('fs-extra');
+const path = require('path');
+const pino = require('pino');
+const { MongoClient } = require('mongodb');
+const {
+  default: makeWASocket,
+  useMultiFileAuthState,
+  makeCacheableSignalKeyStore,
+  fetchLatestBaileysVersion,
+  Browsers,
+  DisconnectReason,
+  delay,
+} = require('@whiskeysockets/baileys');
+const { pairingBridge } = require('./lib/pairingBridge');
 
-# =====================================================================
-#  FIX NOTE — Multi-Session hotfix for bot_core.py
-# =====================================================================
-#  Original file contained a broken raw triple-quoted string literal at
-#  line 6864 (opening r''' but no closing ''' at EOF, which
-#  ended at line 7334). Python refused to parse the module, killing
-#  the bot entirely:
-#      File "/app/bot_core.py", line 6864
-#        EMBEDDED_SERVER_JS = r'''const express = require(...
-#                                 ^
-#      SyntaxError: unterminated triple-quoted string literal
-#                   (detected at line 7334)
-#
-#  The broken block was a *duplicate* of the valid EMBEDDED_SERVER_JS
-#  defined earlier at lines 5956->6652. The on-disk server.js file is
-#  what actually runs, so disabling the duplicate string here is safe.
-#
-#  Real multi-session isolation lives in:
-#    lib/sessionManager.js (per-phone folders: sessions/<phone>/)
-#    lib/pairingBridge.js  (Map<phone, socket>, no primarySocket)
-#    index.js + server.js  (waClients Map<phone, socket>)
-# =====================================================================
+const app = express();
+app.use(express.json({ limit: '2mb' }));
 
+const PORT = Number(process.env.COMPANION_PORT || process.env.PAIRING_SERVER_PORT || 3100);
+const SESSION_ROOT = path.join(process.cwd(), 'sessions');
+const SESSION_INDEX_FILE = path.join(SESSION_ROOT, 'index.json');
+const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
+const sockets = new Map();
+const startPromises = new Map();
+const reconnectTimers = new Map();
+const pairingRequests = new Map();
+const RECONNECT_DELAY_MS = Math.max(2500, Number(process.env.RECONNECT_DELAY_MS || 5000));
+const PAIRING_CODE_CACHE_MS = Math.max(30000, Number(process.env.PAIRING_CODE_CACHE_MS || 55000));
+const SESSION_COLLECTION_NAME = String(process.env.MONGODB_SESSIONS_COLLECTION || 'whatsapp_sessions').trim() || 'whatsapp_sessions';
+const MONGODB_DB_NAME = String(process.env.MONGODB_DB_NAME || 'whatsapp_pairing_api').trim() || 'whatsapp_pairing_api';
+const SESSION_STORE_TIMEOUT_MS = Math.max(5000, Number(process.env.SESSION_STORAGE_TIMEOUT_MS || 20000));
+const MONGODB_URI = String(process.env.MONGODB_URI || process.env.MONGO_URL || '').trim();
+let mongoCollectionPromise = null;
+
+function normalizePhone(raw = '') {
+  return String(raw || '').replace(/\D/g, '').trim();
+}
+
+function getSessionDir(phone) {
+  return path.join(SESSION_ROOT, normalizePhone(phone));
+}
+
+function pickPhone(req) {
+  const body = req.body || {};
+  const query = req.query || {};
+  return normalizePhone(body.num || body.phone || body.number || body.phoneNumber || query.num || query.phone || query.number || query.phoneNumber);
+}
+
+function getBrowserProfile() {
+  try { return Browsers.ubuntu('Chrome'); } catch (_) {}
+  try { return Browsers.windows('Chrome'); } catch (_) {}
+  try { return Browsers.macOS('Safari'); } catch (_) {}
+  return ['Ubuntu', 'Chrome', '22.04'];
+}
+
+function isRemoteStoreEnabled() {
+  return Boolean(MONGODB_URI);
+}
+
+async function ensureSessionRoot() {
+  await fs.ensureDir(SESSION_ROOT);
+}
+
+async function readSessionIndex() {
+  await ensureSessionRoot();
+  try {
+    const data = await fs.readJson(SESSION_INDEX_FILE);
+    return data && typeof data === 'object' ? data : { sessions: {} };
+  } catch (_) {
+    return { sessions: {} };
+  }
+}
+
+async function writeSessionIndex(index) {
+  await ensureSessionRoot();
+  await fs.writeJson(SESSION_INDEX_FILE, index, { spaces: 2 });
+}
+
+async function updateSessionIndex(phone, patch = {}) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return null;
+  const index = await readSessionIndex();
+  const existing = index.sessions?.[normalized] || {};
+  index.sessions = index.sessions || {};
+  index.sessions[normalized] = {
+    phone: normalized,
+    sessionId: normalized,
+    updatedAt: new Date().toISOString(),
+    ...existing,
+    ...patch,
+  };
+  await writeSessionIndex(index);
+  return index.sessions[normalized];
+}
+
+function getDisconnectStatusCode(lastDisconnect = null) {
+  return Number(lastDisconnect?.error?.output?.statusCode || lastDisconnect?.error?.statusCode || 0);
+}
+
+function isPermanentDisconnect(lastDisconnect = null) {
+  const statusCode = getDisconnectStatusCode(lastDisconnect);
+  const rawMessage = String(
+    lastDisconnect?.error?.data ||
+    lastDisconnect?.error?.message ||
+    lastDisconnect?.error?.output?.payload?.message ||
+    ''
+  ).toLowerCase();
+  if (statusCode === Number(DisconnectReason.loggedOut)) return true;
+  if ([401, 403, 405, 500].includes(statusCode)) return true;
+  return /(logged\s*out|device\s*removed|forbidden|banned|blocked|not-authorized|not authorized|session\s*expired|bad\s*session)/i.test(rawMessage);
+}
+
+function listSessionFiles(phone) {
+  const normalized = normalizePhone(phone);
+  const sessionDir = getSessionDir(normalized);
+  if (!normalized || !fs.existsSync(sessionDir)) return [];
+  return fs.readdirSync(sessionDir)
+    .filter((name) => name && name.endsWith('.json'))
+    .sort();
+}
+
+function hasLocalAuthFiles(phone) {
+  return listSessionFiles(phone).some((fileName) => fileName === 'creds.json' || fileName.startsWith('app-state-sync-') || fileName.startsWith('pre-key-') || fileName.startsWith('sender-key-') || fileName.startsWith('session-'));
+}
+
+async function removeSessionDir(phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return;
+  await fs.remove(getSessionDir(normalized));
+}
+
+async function collectSessionFiles(phone) {
+  const normalized = normalizePhone(phone);
+  const files = {};
+  for (const fileName of listSessionFiles(normalized)) {
+    const filePath = path.join(getSessionDir(normalized), fileName);
+    try {
+      files[fileName] = await fs.readFile(filePath, 'utf8');
+    } catch (error) {
+      console.error('Failed to read session file', fileName, error?.message || error);
+    }
+  }
+  return files;
+}
+
+async function writeSessionFiles(phone, files = {}) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return false;
+  const sessionDir = getSessionDir(normalized);
+  await fs.ensureDir(sessionDir);
+
+  const allowed = new Set(Object.keys(files || {}).filter((name) => name.endsWith('.json')));
+  for (const existingFile of listSessionFiles(normalized)) {
+    if (!allowed.has(existingFile)) {
+      try { await fs.remove(path.join(sessionDir, existingFile)); } catch (_) {}
+    }
+  }
+
+  for (const [fileName, content] of Object.entries(files || {})) {
+    if (!fileName || !fileName.endsWith('.json')) continue;
+    await fs.writeFile(path.join(sessionDir, fileName), String(content || ''), 'utf8');
+  }
+  return true;
+}
+
+async function getSessionCollection() {
+  if (!isRemoteStoreEnabled()) return null;
+  if (!mongoCollectionPromise) {
+    mongoCollectionPromise = (async () => {
+      const client = new MongoClient(MONGODB_URI, {
+        appName: 'local-whatsapp-pairing-server',
+        serverSelectionTimeoutMS: SESSION_STORE_TIMEOUT_MS,
+        connectTimeoutMS: SESSION_STORE_TIMEOUT_MS,
+        maxPoolSize: 5,
+        retryWrites: true,
+      });
+      await client.connect();
+      const collection = client.db(MONGODB_DB_NAME).collection(SESSION_COLLECTION_NAME);
+      await Promise.allSettled([
+        collection.createIndex({ phone: 1 }, { unique: true }),
+        collection.createIndex({ updatedAt: -1 }),
+      ]);
+      return collection;
+    })().catch((error) => {
+      mongoCollectionPromise = null;
+      throw error;
+    });
+  }
+  return mongoCollectionPromise;
+}
+
+function normalizeStoredSession(phone, payload = {}) {
+  const normalized = normalizePhone(phone || payload.phone || payload.sessionId || payload._id || '');
+  if (!normalized) return null;
+  const files = {};
+  for (const [fileName, content] of Object.entries(payload.files || {})) {
+    const safeName = path.basename(String(fileName || '').trim());
+    if (!safeName || !safeName.endsWith('.json')) continue;
+    if (typeof content !== 'string') continue;
+    files[safeName] = content;
+  }
+  return {
+    _id: normalized,
+    phone: normalized,
+    sessionId: normalized,
+    registered: payload.registered === true,
+    connected: payload.connected === true,
+    lastConnectedAt: payload.lastConnectedAt || null,
+    lastDisconnectAt: payload.lastDisconnectAt || null,
+    activatedAt: payload.activatedAt || null,
+    updatedAt: payload.updatedAt || new Date().toISOString(),
+    files,
+    fileCount: Object.keys(files).length,
+  };
+}
+
+async function listStoredSessions() {
+  if (!isRemoteStoreEnabled()) return [];
+  try {
+    const collection = await getSessionCollection();
+    const docs = await collection.find({}, { projection: { files: 0 } }).toArray();
+    return docs.map((doc) => normalizeStoredSession(doc.phone || doc.sessionId || doc._id, doc)).filter(Boolean);
+  } catch (error) {
+    console.error('Failed to list stored sessions:', error?.message || error);
+    return [];
+  }
+}
+
+async function fetchStoredSession(phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized || !isRemoteStoreEnabled()) return null;
+  try {
+    const collection = await getSessionCollection();
+    const doc = await collection.findOne({ _id: normalized });
+    return normalizeStoredSession(normalized, doc || {});
+  } catch (error) {
+    console.error('Failed to fetch stored session:', error?.message || error);
+    return null;
+  }
+}
+
+async function upsertStoredSession(phone, payload = {}) {
+  const normalized = normalizePhone(phone);
+  const doc = normalizeStoredSession(normalized, payload || {});
+  if (!doc || !isRemoteStoreEnabled()) return doc;
+  try {
+    const collection = await getSessionCollection();
+    await collection.updateOne({ _id: normalized }, { $set: doc }, { upsert: true });
+  } catch (error) {
+    console.error('Failed to upsert stored session:', error?.message || error);
+  }
+  return doc;
+}
+
+async function deleteStoredSession(phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized || !isRemoteStoreEnabled()) return false;
+  try {
+    const collection = await getSessionCollection();
+    await collection.deleteOne({ _id: normalized });
+    return true;
+  } catch (error) {
+    console.error('Failed to delete stored session:', error?.message || error);
+    return false;
+  }
+}
+
+async function syncSessionToStore(phone, metadata = {}) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return false;
+  const files = await collectSessionFiles(normalized);
+  const snapshot = await upsertStoredSession(normalized, {
+    ...metadata,
+    phone: normalized,
+    sessionId: normalized,
+    files,
+    updatedAt: new Date().toISOString(),
+  });
+  await updateSessionIndex(normalized, {
+    registered: snapshot?.registered === true,
+    connected: metadata.connected === true,
+    lastConnectedAt: snapshot?.lastConnectedAt || null,
+    activatedAt: snapshot?.activatedAt || null,
+    remoteBackedUpAt: new Date().toISOString(),
+    fileCount: snapshot?.fileCount || Object.keys(files).length,
+  });
+  return true;
+}
+
+async function restoreSessionFromStore(phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized || hasLocalAuthFiles(normalized)) return false;
+  const stored = await fetchStoredSession(normalized);
+  if (!stored || !Object.keys(stored.files || {}).length) return false;
+  await writeSessionFiles(normalized, stored.files || {});
+  await updateSessionIndex(normalized, {
+    registered: stored.registered === true,
+    connected: false,
+    restoredFromDatabaseAt: new Date().toISOString(),
+    lastConnectedAt: stored.lastConnectedAt || null,
+    fileCount: stored.fileCount || Object.keys(stored.files || {}).length,
+  });
+  return true;
+}
+
+function clearReconnect(phone) {
+  const normalized = normalizePhone(phone);
+  const timer = reconnectTimers.get(normalized);
+  if (timer) {
+    clearTimeout(timer);
+    reconnectTimers.delete(normalized);
+  }
+}
+
+async function destroySocket(phone) {
+  const normalized = normalizePhone(phone);
+  const existing = sockets.get(normalized);
+  if (!existing) return;
+  sockets.delete(normalized);
+  try { existing.ws?.close?.(); } catch (_) {}
+  try { existing.end?.(); } catch (_) {}
+  try { pairingBridge.releaseSocket(normalized); } catch (_) {}
+}
+
+async function purgeSession(phone, { removeRemote = true } = {}) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) return false;
+  pairingRequests.delete(normalized);
+  clearReconnect(normalized);
+  await destroySocket(normalized);
+  await removeSessionDir(normalized);
+  if (removeRemote) {
+    await deleteStoredSession(normalized);
+  }
+  await updateSessionIndex(normalized, {
+    connected: false,
+    registered: false,
+    pendingPairing: false,
+    lastPurgedAt: new Date().toISOString(),
+  });
+  return true;
+}
+
+function scheduleReconnect(phone) {
+  const normalized = normalizePhone(phone);
+  if (!normalized || reconnectTimers.has(normalized)) return;
+  const timer = setTimeout(async () => {
+    reconnectTimers.delete(normalized);
+    try {
+      await createSocket(normalized, { bootRestore: true });
+    } catch (error) {
+      console.error('Reconnect failed for', normalized, error?.message || error);
+      scheduleReconnect(normalized);
+    }
+  }, RECONNECT_DELAY_MS);
+  reconnectTimers.set(normalized, timer);
+}
+
+function waitForPairingWindow(sock, phone, timeoutMs = 20000) {
+  const normalized = normalizePhone(phone);
+  if (!sock) return Promise.reject(new Error('Socket is required'));
+  if (sock?.authState?.creds?.registered === true || sock?.user) {
+    return Promise.resolve('registered');
+  }
+
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const cleanup = () => {
+      clearTimeout(timer);
+      try {
+        if (typeof sock.ev.off === 'function') sock.ev.off('connection.update', onUpdate);
+        else if (typeof sock.ev.removeListener === 'function') sock.ev.removeListener('connection.update', onUpdate);
+      } catch (_) {}
+    };
+    const finishResolve = (reason) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      updateSessionIndex(normalized, {
+        pendingPairing: true,
+        pairingWindowReadyAt: new Date().toISOString(),
+        pairingWindowReason: String(reason || 'unknown'),
+      }).catch(() => {});
+      resolve(String(reason || 'ready'));
+    };
+    const finishReject = (error) => {
+      if (settled) return;
+      settled = true;
+      cleanup();
+      reject(error instanceof Error ? error : new Error(String(error)));
+    };
+    const onUpdate = (update = {}) => {
+      const connection = String(update.connection || '').trim();
+      if (connection === 'connecting' || connection === 'open' || update.qr) {
+        finishResolve(update.qr ? 'qr' : (connection || 'connecting'));
+        return;
+      }
+      if (connection === 'close' && isPermanentDisconnect(update.lastDisconnect)) {
+        finishReject(new Error(`Session closed before pairing (${getDisconnectStatusCode(update.lastDisconnect) || 'unknown'})`));
+      }
+    };
+    const timer = setTimeout(() => finishResolve('timeout'), timeoutMs);
+    try {
+      sock.ev.on('connection.update', onUpdate);
+    } catch (error) {
+      finishReject(error);
+    }
+  });
+}
+
+async function requestPairingCodeWithRetry(sock, phone) {
+  const normalized = normalizePhone(phone);
+  const cached = pairingRequests.get(normalized);
+  if (cached && cached.code && (Date.now() - Number(cached.requestedAt || 0) < PAIRING_CODE_CACHE_MS)) {
+    return String(cached.code);
+  }
+
+  await waitForPairingWindow(sock, normalized);
+  if (sock?.authState?.creds?.registered === true || sock?.user) {
+    throw new Error('الرقم مربوط بالفعل والجلسة جاهزة.');
+  }
+
+  const waits = [1200, 2500, 4500, 7000];
+  let lastError = new Error('Pairing code request failed');
+  for (const waitMs of waits) {
+    try {
+      await delay(waitMs);
+      const code = String(await sock.requestPairingCode(normalized) || '').trim();
+      if (code) {
+        pairingRequests.set(normalized, { code, requestedAt: Date.now() });
+        return code;
+      }
+      lastError = new Error('Empty pairing code response');
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+    }
+  }
+  throw lastError;
+}
+
+async function handleConnectionOpened(sock, phone, state) {
+  const normalized = normalizePhone(phone);
+  const nowIso = new Date().toISOString();
+  pairingRequests.delete(normalized);
+  clearReconnect(normalized);
+
+  await updateSessionIndex(normalized, {
+    registered: true,
+    connected: true,
+    pendingPairing: false,
+    lastConnectedAt: nowIso,
+    meId: sock.user?.id || '',
+    lastError: '',
+  });
+
+  try { await syncSessionToStore(normalized, { registered: true, connected: true, lastConnectedAt: nowIso }); } catch (_) {}
+  try {
+    pairingBridge.setSocket(normalized, sock, {
+      phone: normalized,
+      registered: true,
+      meId: sock.user?.id || '',
+      connectedAt: nowIso,
+    });
+  } catch (_) {}
+}
+
+async function createSocket(phone, options = {}) {
+  const normalized = normalizePhone(phone);
+  if (!normalized) throw new Error('Phone is required');
+  if (sockets.has(normalized)) return sockets.get(normalized);
+  if (startPromises.has(normalized)) return startPromises.get(normalized);
+
+  const startPromise = (async () => {
+    clearReconnect(normalized);
+
+    if (!hasLocalAuthFiles(normalized)) {
+      await restoreSessionFromStore(normalized);
+    }
+
+    await ensureSessionRoot();
+    const sessionDir = getSessionDir(normalized);
+    await fs.ensureDir(sessionDir);
+    const helper = await useMultiFileAuthState(sessionDir);
+    const state = helper.state;
+    const { version } = await fetchLatestBaileysVersion().catch(() => ({ version: undefined }));
+    const sock = makeWASocket({
+      version,
+      browser: getBrowserProfile(),
+      logger,
+      printQRInTerminal: false,
+      auth: {
+        creds: state.creds,
+        keys: makeCacheableSignalKeyStore(state.keys, logger),
+      },
+      markOnlineOnConnect: true,
+      syncFullHistory: false,
+      defaultQueryTimeoutMs: 0,
+      connectTimeoutMs: 60000,
+      keepAliveIntervalMs: 15000,
+      fireInitQueries: true,
+      emitOwnEvents: false,
+      generateHighQualityLinkPreview: false,
+    });
+
+    sock.__sessionState = state;
+    sockets.set(normalized, sock);
+
+    const persistState = async (extra = {}) => {
+      try { await helper.saveCreds(); } catch (error) { console.error('Failed to save creds for', normalized, error?.message || error); }
+      await syncSessionToStore(normalized, {
+        registered: extra.registered === true || state?.creds?.registered === true,
+        connected: extra.connected === true,
+        lastConnectedAt: extra.lastConnectedAt || null,
+        lastDisconnectAt: extra.lastDisconnectAt || null,
+      });
+    };
+
+    sock.ev.on('creds.update', async () => {
+      await updateSessionIndex(normalized, {
+        registered: state?.creds?.registered === true,
+        lastCredsSaveAt: new Date().toISOString(),
+      });
+      await persistState({ registered: state?.creds?.registered === true });
+    });
+
+    sock.ev.on('connection.update', async (update = {}) => {
+      const connection = update.connection || '';
+      if (connection === 'connecting' || update.qr) {
+        await updateSessionIndex(normalized, {
+          connected: false,
+          registered: state?.creds?.registered === true,
+          pendingPairing: state?.creds?.registered !== true,
+          lastPairingWindowAt: new Date().toISOString(),
+          lastError: '',
+        });
+      }
+
+      if (connection === 'open') {
+        await handleConnectionOpened(sock, normalized, state);
+        return;
+      }
+
+      if (connection === 'close') {
+        sockets.delete(normalized);
+        const statusCode = getDisconnectStatusCode(update.lastDisconnect);
+        const permanent = isPermanentDisconnect(update.lastDisconnect);
+        const restartRequired = statusCode === Number(DisconnectReason.restartRequired);
+        await updateSessionIndex(normalized, {
+          connected: false,
+          registered: state?.creds?.registered === true,
+          pendingPairing: state?.creds?.registered !== true,
+          lastDisconnectAt: new Date().toISOString(),
+          lastDisconnectReason: String(update.lastDisconnect?.error?.message || statusCode || ''),
+        });
+        if (permanent) {
+          await purgeSession(normalized, { removeRemote: true });
+          return;
+        }
+        if (restartRequired) {
+          await destroySocket(normalized);
+        }
+        scheduleReconnect(normalized);
+      }
+    });
+
+    await updateSessionIndex(normalized, {
+      registered: state?.creds?.registered === true,
+      connected: false,
+      sessionDir,
+      startedAt: new Date().toISOString(),
+    });
+
+    if (state?.creds?.registered === true) {
+      try { pairingBridge.setSocket(normalized, sock, { phone: normalized, registered: true }); } catch (_) {}
+      await persistState({ registered: true, connected: false });
+    }
+    return sock;
+  })().finally(() => {
+    startPromises.delete(normalized);
+  });
+
+  startPromises.set(normalized, startPromise);
+  return startPromise;
+}
+
+async function listLocalSessionPhones() {
+  await ensureSessionRoot();
+  const entries = await fs.readdir(SESSION_ROOT).catch(() => []);
+  return entries.filter((name) => name !== 'index.json').map((name) => normalizePhone(name)).filter(Boolean);
+}
+
+async function restoreAllSessionsOnBoot() {
+  const localPhones = await listLocalSessionPhones();
+  const remotePhones = (await listStoredSessions()).map((item) => normalizePhone(item.phone || item.sessionId || item._id || '')).filter(Boolean);
+  const phones = Array.from(new Set([...localPhones, ...remotePhones]));
+  for (const phone of phones) {
+    try {
+      await createSocket(phone, { bootRestore: true });
+      await delay(350);
+    } catch (error) {
+      console.error('Boot restore failed for', phone, error?.message || error);
+    }
+  }
+}
+
+app.get('/', async (_req, res) => {
+  const index = await readSessionIndex();
+  res.json({ status: 'ok', service: 'local-whatsapp-pairing-server', sessions: Object.keys(index.sessions || {}).length, time: new Date().toISOString() });
+});
+
+app.get('/health', async (_req, res) => {
+  const index = await readSessionIndex();
+  res.json({ status: 'ok', sessions: index.sessions || {}, activeSockets: Array.from(sockets.keys()) });
+});
+
+app.get('/api/session-status', async (req, res) => {
+  const phone = pickPhone(req);
+  if (!phone) return res.status(400).json({ success: false, error: 'phone is required' });
+  const index = await readSessionIndex();
+  return res.json({ success: true, session: index.sessions?.[phone] || null, active: sockets.has(phone), bridgeSocket: !!pairingBridge.getSocket(phone) });
+});
+
+app.all('/api/pairing', async (req, res) => {
+  const phone = pickPhone(req);
+  if (!phone) return res.status(400).json({ success: false, error: 'أدخل الرقم أولاً' });
+
+  try {
+    const index = await readSessionIndex();
+    const existingRecord = index.sessions?.[phone] || {};
+    if (existingRecord.registered === true || hasLocalAuthFiles(phone)) {
+      const restoredSock = await createSocket(phone, { bootRestore: true });
+      if (restoredSock?.user || existingRecord.registered === true || restoredSock?.__sessionState?.creds?.registered === true) {
+        await updateSessionIndex(phone, {
+          registered: true,
+          connected: true,
+          alreadyLinked: true,
+          pendingPairing: false,
+          lastPairingCheckAt: new Date().toISOString(),
+        });
+        try { await handleConnectionOpened(restoredSock, phone, restoredSock.__sessionState); } catch (_) {}
+        return res.json({ success: true, linked: true, alreadyLinked: true, number: phone, message: 'الرقم مربوط بالفعل والجلسة محفوظة.' });
+      }
+    }
+
+    await purgeSession(phone, { removeRemote: true });
+    const sock = await createSocket(phone, { bootRestore: false });
+    if (sock?.authState?.creds?.registered === true || sock?.user) {
+      await updateSessionIndex(phone, {
+        registered: true,
+        connected: true,
+        alreadyLinked: true,
+        pendingPairing: false,
+        lastPairingCheckAt: new Date().toISOString(),
+      });
+      try { await handleConnectionOpened(sock, phone, sock.__sessionState); } catch (_) {}
+      return res.json({ success: true, linked: true, alreadyLinked: true, number: phone, message: 'الرقم مربوط بالفعل والجلسة محفوظة.' });
+    }
+
+    const code = await requestPairingCodeWithRetry(sock, phone);
+    await updateSessionIndex(phone, {
+      registered: false,
+      connected: false,
+      pendingPairing: true,
+      lastPairCodeRequestedAt: new Date().toISOString(),
+      lastError: '',
+    });
+    await syncSessionToStore(phone, { registered: false, connected: false });
+    return res.json({ success: true, linked: false, number: phone, code, pairingCode: code, expiresInSeconds: Math.round(PAIRING_CODE_CACHE_MS / 1000) });
+  } catch (error) {
+    await updateSessionIndex(phone, {
+      registered: false,
+      connected: false,
+      pendingPairing: false,
+      lastError: error?.message || String(error),
+      lastErrorAt: new Date().toISOString(),
+    });
+    console.error('Pairing failure for', phone, error?.stack || error?.message || error);
+    return res.status(500).json({ success: false, error: error?.message || 'فشل توليد الكود، حاول مجدداً' });
+  }
+});
+
+app.delete('/api/session/:phone', async (req, res) => {
+  const phone = normalizePhone(req.params?.phone || '');
+  if (!phone) return res.status(400).json({ success: false, error: 'phone is required' });
+  await purgeSession(phone, { removeRemote: true });
+  return res.json({ success: true, deleted: true, phone });
+});
+
+process.on('SIGINT', async () => {
+  for (const timer of reconnectTimers.values()) clearTimeout(timer);
+  for (const phone of Array.from(sockets.keys())) await destroySocket(phone);
+  process.exit(0);
+});
+
+process.on('SIGTERM', async () => {
+  for (const timer of reconnectTimers.values()) clearTimeout(timer);
+  for (const phone of Array.from(sockets.keys())) await destroySocket(phone);
+  process.exit(0);
+});
+
+app.listen(PORT, '0.0.0.0', async () => {
+  await ensureSessionRoot();
+  await restoreAllSessionsOnBoot();
+  console.log(`Local pairing server listening on ${PORT}`);
+});
+'''
+
+def ensure_embedded_companion_files(base_dir: Optional[Path] = None) -> dict[str, Path]:
+    target_dir = Path(base_dir) if base_dir else EMBEDDED_COMPANION_DIR
+    embedded_files = {
+        "package.json": EMBEDDED_PACKAGE_JSON,
+        "server.js": EMBEDDED_SERVER_JS,
+        "index.html": EMBEDDED_INDEX_HTML,
+        "lib/pairingBridge.js": EMBEDDED_PAIRING_BRIDGE_JS,
+    }
+    protected_existing_files: set[str] = set()
+    written_files: dict[str, Path] = {}
+    for filename, content in embedded_files.items():
+        file_path = target_dir / filename
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        existing_content = None
+        if file_path.exists():
+            try:
+                existing_content = file_path.read_text(encoding="utf-8")
+            except Exception:
+                existing_content = None
+        if existing_content != content:
+            file_path.write_text(content, encoding="utf-8")
+        written_files[filename] = file_path
+
+    snapshot_path = target_dir / PROJECT_SNAPSHOT_PATH.name
+    try:
+        snapshot_payload = dict(PROJECT_SNAPSHOT if isinstance(PROJECT_SNAPSHOT, dict) else {})
+        snapshot_payload["generated_at"] = datetime.now(timezone.utc).isoformat()
+        snapshot_payload["target_site_base_url"] = TARGET_SITE_BASE_URL
+        snapshot_path.write_text(json.dumps(snapshot_payload, ensure_ascii=False, indent=2), encoding="utf-8")
+        written_files[snapshot_path.name] = snapshot_path
+    except Exception:
+        logger.exception("Failed to write project snapshot companion file")
+    return written_files
+
+EMBEDDED_COMPANION_PROCESS: Optional[subprocess.Popen[Any]] = None
+
+
+def wait_for_embedded_companion(timeout_seconds: int = 90) -> None:
+    deadline = time.time() + timeout_seconds
+    last_error: Optional[Exception] = None
+    while time.time() < deadline:
+        process = EMBEDDED_COMPANION_PROCESS
+        if process is not None and process.poll() is not None:
+            raise RuntimeError("تعذر تشغيل خادم الاقتران الداخلي: process exited unexpectedly")
+        try:
+            response = requests.get(f"{INTERNAL_PAIRING_BASE_URL}/health", timeout=3)
+            if response.ok:
+                return
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+        time.sleep(1.0)
+    if last_error is not None:
+        raise RuntimeError(f"تعذر تشغيل خادم الاقتران الداخلي: {last_error}") from last_error
+    raise RuntimeError("تعذر تشغيل خادم الاقتران الداخلي خلال المهلة المحددة")
+
+
+def stop_embedded_companion_process() -> None:
+    global EMBEDDED_COMPANION_PROCESS, EMBEDDED_COMPANION_LOG_HANDLE
+    process = EMBEDDED_COMPANION_PROCESS
+    EMBEDDED_COMPANION_PROCESS = None
+    if process is not None and process.poll() is None:
+        try:
+            process.terminate()
+            process.wait(timeout=15)
+        except Exception:
+            try:
+                process.kill()
+            except Exception:
+                pass
+    if EMBEDDED_COMPANION_LOG_HANDLE is not None:
+        try:
+            EMBEDDED_COMPANION_LOG_HANDLE.close()
+        except Exception:
+            pass
+        EMBEDDED_COMPANION_LOG_HANDLE = None
+
+
+def ensure_project_runtime_dependencies() -> None:
+    if shutil.which("node") is None:
+        raise RuntimeError("Node.js غير متوفر على الاستضافة، لذلك محرك واتساب المحلي لن يعمل.")
+
+    project_index_file = BASE_DIR / "index.js"
+    if not project_index_file.exists():
+        raise RuntimeError("تعذر العثور على index.js داخل المشروع الرئيسي.")
+
+    required_paths = [
+        BASE_DIR / "node_modules" / "express",
+        BASE_DIR / "node_modules" / "fs-extra",
+        BASE_DIR / "node_modules" / "pino",
+        BASE_DIR / "node_modules" / "mongodb",
+        BASE_DIR / "node_modules" / "@whiskeysockets" / "baileys",
+    ]
+    if all(path.exists() for path in required_paths):
+        return
+
+    if shutil.which("npm") is None:
+        raise RuntimeError("npm غير متوفر على الاستضافة، لذلك لا يمكن تثبيت مكتبات محرك واتساب.")
+
+    logger.info("Installing main project npm dependencies...")
+    subprocess.check_call(
+        ["npm", "install", "--omit=dev", "--legacy-peer-deps", "--no-audit", "--no-fund"],
+        cwd=str(BASE_DIR),
+    )
+
+
+def ensure_embedded_companion_dependencies() -> None:
+    if shutil.which("node") is None:
+        raise RuntimeError("Node.js غير متوفر على الاستضافة، لذلك خادم الاقتران الداخلي لن يعمل.")
+    if shutil.which("npm") is None:
+        raise RuntimeError("npm غير متوفر على الاستضافة، لذلك لا يمكن تثبيت مكتبات خادم الاقتران.")
+
+    ensure_embedded_companion_files(EMBEDDED_COMPANION_DIR)
+
+    embedded_node_modules = EMBEDDED_COMPANION_DIR / "node_modules"
+    root_node_modules = BASE_DIR / "node_modules"
+    if not embedded_node_modules.exists() and root_node_modules.exists():
+        try:
+            os.symlink(root_node_modules, embedded_node_modules, target_is_directory=True)
+        except FileExistsError:
+            pass
+        except Exception:
+            logger.exception("Failed to link root node_modules into embedded runtime")
+
+    required_paths = [
+        EMBEDDED_COMPANION_DIR / "node_modules" / "express",
+        EMBEDDED_COMPANION_DIR / "node_modules" / "fs-extra",
+        EMBEDDED_COMPANION_DIR / "node_modules" / "pino",
+        EMBEDDED_COMPANION_DIR / "node_modules" / "mongodb",
+        EMBEDDED_COMPANION_DIR / "node_modules" / "@whiskeysockets" / "baileys",
+    ]
+    if all(path.exists() for path in required_paths):
+        return
+
+    logger.info("Installing embedded companion npm dependencies...")
+    subprocess.check_call(
+        ["npm", "install", "--omit=dev", "--no-audit", "--no-fund"],
+        cwd=str(EMBEDDED_COMPANION_DIR),
+    )
+
+
+
+def start_embedded_companion_process() -> bool:
+    global EMBEDDED_COMPANION_PROCESS, PAIRING_RUNTIME_DISABLED_REASON, EMBEDDED_COMPANION_LOG_HANDLE
+    if EMBEDDED_COMPANION_PROCESS is not None and EMBEDDED_COMPANION_PROCESS.poll() is None:
+        return True
+
+    ensure_embedded_companion_files(EMBEDDED_COMPANION_DIR)
+
+    base_env = os.environ.copy()
+    base_env["PAIRING_SERVER_PORT"] = str(COMPANION_PORT)
+    base_env["COMPANION_PORT"] = str(COMPANION_PORT)
+    base_env["APP_PORT"] = str(COMPANION_PORT)
+    base_env["PORT"] = str(COMPANION_PORT)
+    base_env.setdefault("LOG_LEVEL", base_env.get("LOG_LEVEL", "silent"))
+    base_env.setdefault("MONGODB_URI", MONGODB_URI)
+    base_env.setdefault("MONGO_URL", MONGODB_URI)
+    base_env.setdefault("MONGODB_DB_NAME", MONGODB_DB_NAME)
+    base_env.setdefault("MONGODB_SESSIONS_COLLECTION", MONGODB_SESSIONS_COLLECTION)
+
+    launch_targets = [
+        {
+            "label": "main-project-runtime",
+            "command": ["node", "index.js"],
+            "cwd": BASE_DIR,
+            "prepare": ensure_project_runtime_dependencies,
+            "drop_telegram_token": True,
+        },
+        {
+            "label": "embedded-runtime",
+            "command": ["node", "server.js"],
+            "cwd": EMBEDDED_COMPANION_DIR,
+            "prepare": ensure_embedded_companion_dependencies,
+            "drop_telegram_token": False,
+        },
+    ]
+
+    last_error: Optional[Exception] = None
+    for target in launch_targets:
+        stop_embedded_companion_process()
+        try:
+            target["prepare"]()
+            env = dict(base_env)
+            if target.get("drop_telegram_token"):
+                env["BOT_TOKEN"] = ""
+                env["TELEGRAM_BOT_TOKEN"] = ""
+                env["ENABLE_TELEGRAM_PAIR_BOT"] = "false"
+                env["DISABLE_TELEGRAM_BOT"] = "true"
+            EMBEDDED_COMPANION_LOG_PATH.parent.mkdir(parents=True, exist_ok=True)
+            EMBEDDED_COMPANION_LOG_HANDLE = open(EMBEDDED_COMPANION_LOG_PATH, "ab")
+            EMBEDDED_COMPANION_PROCESS = subprocess.Popen(
+                target["command"],
+                cwd=str(target["cwd"]),
+                env=env,
+                stdout=EMBEDDED_COMPANION_LOG_HANDLE,
+                stderr=subprocess.STDOUT,
+            )
+            wait_for_embedded_companion()
+            PAIRING_RUNTIME_DISABLED_REASON = ""
+            logger.info("Started local WhatsApp runtime using %s", target["label"])
+            return True
+        except Exception as exc:
+            last_error = exc
+            PAIRING_RUNTIME_DISABLED_REASON = f"{target['label']}: {exc}"
+            logger.exception("Failed to start %s", target["label"])
+            stop_embedded_companion_process()
+
+    if last_error is not None:
+        PAIRING_RUNTIME_DISABLED_REASON = str(last_error)
+    return False
+
+
+atexit.register(stop_embedded_companion_process)
+
+
+def main():
+    global PAIRING_RUNTIME_DISABLED_REASON
+    logger.info("Starting Telegram bot")
+    print("[boot] Starting Telegram bot...", flush=True)
+
+    if not re.fullmatch(r"\d{6,}:[A-Za-z0-9_-]{20,}", BOT_TOKEN):
+        raise RuntimeError("BOT_TOKEN format looks invalid. Please verify the token value.")
+
+    SETTINGS["pair_code_api_url"] = resolve_pair_code_api_url().rstrip("/")
+    save_settings()
+    ensure_embedded_companion_files(EMBEDDED_COMPANION_DIR)
+    embedded_companion_started = start_embedded_companion_process()
+    if not embedded_companion_started:
+        raise RuntimeError(
+            "تعذر تشغيل محرك واتساب المحلي داخل نفس المشروع. تأكد أن الاستضافة تدعم Node.js و npm مع Python وأن npm install تم بنجاح أثناء البناء.\n"
+            f"سبب الخطأ: {PAIRING_RUNTIME_DISABLED_REASON or 'unknown error'}"
+        )
+
+    PAIRING_RUNTIME_DISABLED_REASON = ""
+    health_server = start_healthcheck_server()
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init).build()
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("menu", menu))
+    app.add_handler(CommandHandler("emoji", user_emoji_command))
+    app.add_handler(CommandHandler("drf", drf_command))
+    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(CommandHandler("ping", ping))
+    app.add_handler(CommandHandler("dev", dev_command))
+    app.add_handler(CallbackQueryHandler(handle_buttons))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
+
+    try:
+        app.run_polling(drop_pending_updates=True)
+    except Conflict:
+        logger.error(
+            "Another instance is already running for this token. Stop the old process/server before starting this one."
+        )
+        raise SystemExit(1)
+    finally:
+        stop_embedded_companion_process()
+        if health_server is not None:
+            health_server.shutdown()
+            health_server.server_close()
+
+
+if __name__ == "__main__":
+    main()

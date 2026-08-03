@@ -313,14 +313,11 @@ function clearReconnect(phone) {
   }
 }
 
-async function destroySocket(phone, { logout = false } = {}) {
+async function destroySocket(phone) {
   const normalized = normalizePhone(phone);
   const existing = sockets.get(normalized);
   if (!existing) return;
   sockets.delete(normalized);
-  if (logout) {
-    try { await existing.logout?.(); } catch (_) {}
-  }
   try { existing.ws?.close?.(); } catch (_) {}
   try { existing.end?.(); } catch (_) {}
   try { pairingBridge.releaseSocket(normalized); } catch (_) {}
@@ -331,7 +328,7 @@ async function purgeSession(phone, { removeRemote = true } = {}) {
   if (!normalized) return false;
   pairingRequests.delete(normalized);
   clearReconnect(normalized);
-  await destroySocket(normalized, { logout: true });
+  await destroySocket(normalized);
   await removeSessionDir(normalized);
   if (removeRemote) {
     await deleteStoredSession(normalized);
@@ -561,7 +558,7 @@ async function createSocket(phone, options = {}) {
           return;
         }
         if (restartRequired) {
-          await destroySocket(normalized, { logout: true });
+          await destroySocket(normalized);
         }
         scheduleReconnect(normalized);
       }
