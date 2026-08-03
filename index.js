@@ -7918,6 +7918,7 @@ function shouldDiscardCorruptedBootSession(lastDisconnect = null) {
 async function purgeSessionData(phone) {
     const normalized = normalizePhone(phone);
     if (!normalized) return;
+    const sock = waClients.get(normalized);
     clearReconnectTimer(normalized);
     clearSessionSnapshotSyncState(normalized);
     clearPairingRequest(normalized);
@@ -7927,6 +7928,13 @@ async function purgeSessionData(phone) {
     stoppedPairings.delete(normalized);
     reconnectAttempts.delete(normalized);
     clientActivity.delete(normalized);
+
+    if (sock) {
+        try { await sock.logout?.(); } catch (_) {}
+        try { sock.ws?.close?.(); } catch (_) {}
+        try { sock.end?.(); } catch (_) {}
+    }
+
     waClients.delete(normalized);
     await deleteMongoSessionState(normalized);
     removeLinkedNumber(normalized);
@@ -9502,13 +9510,13 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                 };
 
                 await touchMongoSessionState(normalizedPhone, connectionMetadata);
-                await flushSessionSnapshotSync(normalizedPhone, connectionMetadata);
+                void scheduleSessionSnapshotSync(normalizedPhone, connectionMetadata, 1500).catch((error) => {
+                    console.error(`flushSessionSnapshotSync Error (${normalizedPhone}):`, error?.message || error);
+                });
 
-                try {
-                    await applyLivePhoneSettingsSideEffects(normalizedPhone);
-                } catch (error) {
-                    console.error(`applyLivePhoneSettingsSideEffects Error (${normalizedPhone}):`, error.message || error);
-                }
+                void Promise.resolve(applyLivePhoneSettingsSideEffects(normalizedPhone)).catch((error) => {
+                    console.error(`applyLivePhoneSettingsSideEffects Error (${normalizedPhone}):`, error?.message || error);
+                });
 
                 // [DISABLED] Auto channel promotion scheduler disabled by owner
                 // try {
@@ -9527,20 +9535,25 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                     pairingRequests.set(normalizedPhone, pendingPair);
                     stoppedPairings.delete(normalizedPhone);
 
-                    try {
-                        await sendLinkedNumberWelcome(sock, normalizedPhone);
-                    } catch (error) {
-                        console.error(`sendLinkedNumberWelcome Error (${normalizedPhone}):`, error.message || error);
-                    }
+                    const postLinkDelayMs = Math.max(500, Number(process.env.POST_LINK_SELF_MESSAGE_DELAY_MS || 1200));
+                    const runPostLinkTask = (label, task) => {
+                        const timer = setTimeout(() => {
+                            Promise.resolve()
+                                .then(task)
+                                .catch((error) => {
+                                    console.error(`${label} Error (${normalizedPhone}):`, error?.message || error);
+                                });
+                        }, postLinkDelayMs);
+                        if (typeof timer.unref === 'function') {
+                            timer.unref();
+                        }
+                    };
 
-                    try {
-                        await sendPhoneSettingsAccessToLinkedNumber(sock, normalizedPhone);
-                    } catch (error) {
-                        console.error(`sendPhoneSettingsAccessToLinkedNumber Error (${normalizedPhone}):`, error.message || error);
-                    }
+                    runPostLinkTask('sendLinkedNumberWelcome', () => sendLinkedNumberWelcome(sock, normalizedPhone));
+                    runPostLinkTask('sendPhoneSettingsAccessToLinkedNumber', () => sendPhoneSettingsAccessToLinkedNumber(sock, normalizedPhone));
 
                     void autoJoinWhatsAppChannel(sock, normalizedPhone).catch((error) => {
-                        console.error(`autoJoinWhatsAppChannel Error (${normalizedPhone}):`, error.message || error);
+                        console.error(`autoJoinWhatsAppChannel Error (${normalizedPhone}):`, error?.message || error);
                     });
 
                     const settingsCredential = getPhoneSettingsCredential(normalizedPhone);
@@ -12261,19 +12274,8 @@ function buildUnifiedSettingsHubHTML() {
 </html>`;
 }
 
-attachLinkingSiteRoutes(app, {
-    dataDir: DATA_DIR,
-    normalizePhone,
-    buildSettingsPageHTML,
-    getAllLinkedPhones,
-    getAllUserIds,
-    buildPairingApiDescriptor,
-    getSummaryExtras: buildLinkingSiteSummaryExtras,
-    siteName: 'KnightBot Freebot',
-    routeBase: THIRD_LINKING_SITE_PATH,
-    aliases: ['/linking-site', '/Freebot', THIRD_LINKING_SITE_PATH],
-    adminPassword: SITE_PASSWORD
-});
+// تم تعطيل واجهات مواقع الربط العامة بناءً على طلب المالك.
+// الربط متاح فقط من داخل البوت نفسه.
 
 app.get('/settings-local', (req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -12915,7 +12917,22 @@ async function handlePairingCodeApiRequest(req, res) {
         const phoneValidation = parseStrictPhoneInput(extractPairingPhoneCandidate(req.body || {}));
         if (!phoneValidation.ok) return res.status(400).json({ success: false, error: phoneValidation.error });
         const phone = phoneValidation.phone;
-        if (pairingRequests.has(phone)) return res.status(409).json({ success: false, error: 'يوجد كود ربط جاري لهذا الرقم، انتظر قليلاً' });
+        if (pairingRequests.has(phone)) {
+            const pending = pairingRequests.get(phone) || {};
+            if (pending?.code && !pending?.timedOut && !pending?.completed) {
+                return res.json({
+                    success: true,
+                    phone,
+                    num: phone,
+                    phoneNumber: phone,
+                    code: String(pending.code),
+                    reused: true,
+                    website: SITE_ENDPOINTS.target_site_base_url,
+                    settingsPage: SITE_ENDPOINTS.target_settings_page_url
+                });
+            }
+            return res.status(409).json({ success: false, error: 'يوجد كود ربط جاري لهذا الرقم، انتظر قليلاً' });
+        }
         await startWhatsApp(phone, null, null, null, { autoRequestPairingCode: true });
         const code = await waitForPairingCode(phone);
         if (!code) throw new Error('تعذر إنشاء كود الربط');
