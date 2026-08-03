@@ -5286,40 +5286,63 @@ async function autoJoinWhatsAppChannel(sock, phone) {
     }
 }
 
+function buildLinkedPrivateTargets(sock, phone) {
+    const normalizedPhone = normalizePhone(phone);
+    const phoneJid = normalizedPhone ? `${normalizedPhone}@s.whatsapp.net` : '';
+    const ownJid = normalizeWhatsAppJid(sock?.user?.id);
+    return Array.from(new Set([phoneJid, ownJid].filter(Boolean)));
+}
+
+async function sendLinkedSelfMessage(sock, phone, messagePayload, options = {}) {
+    const attempts = Math.max(1, Number(options.attempts || 4));
+    const initialDelayMs = Math.max(0, Number(options.initialDelayMs || 350));
+    const retryDelayMs = Math.max(250, Number(options.retryDelayMs || 500));
+    const targets = buildLinkedPrivateTargets(sock, phone);
+    if (!targets.length) return { ok: false, reason: 'no-target' };
+
+    if (initialDelayMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, initialDelayMs));
+    }
+
+    let lastError = null;
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+        for (const jid of targets) {
+            try {
+                const sent = await sock.sendMessage(jid, messagePayload);
+                rememberOwnerControlBypassResult(sent);
+                return { ok: true, jid, sent };
+            } catch (error) {
+                lastError = error;
+            }
+        }
+        if (attempt < attempts - 1) {
+            await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+        }
+    }
+
+    return { ok: false, reason: 'send-failed', error: lastError };
+}
+
 async function sendLinkedNumberWelcome(sock, phone) {
     try {
         const messageText = buildLinkedNumberWelcomeMessage(phone);
-        if (!String(messageText || '').trim()) return;
-        const ownJid = normalizeWhatsAppJid(sock.user?.id);
-        const phoneJid = `${normalizePhone(phone)}@s.whatsapp.net`;
-        const targets = Array.from(new Set([ownJid, phoneJid].filter(Boolean)));
-        for (const jid of targets) {
-            try {
-                await sock.sendMessage(jid, { text: messageText });
-                return;
-            } catch (_) {}
-        }
+        if (!String(messageText || '').trim()) return false;
+        const result = await sendLinkedSelfMessage(sock, phone, { text: messageText });
+        return result.ok === true;
     } catch (error) {
-        console.error(`Linked Welcome Error (${phone}):`, error.message);
+        console.error(`Linked Welcome Error (${phone}):`, error.message || error);
     }
+    return false;
 }
 
 async function sendPhoneSettingsAccessToLinkedNumber(sock, phone, appId = null) {
     try {
         const messageText = buildPhoneSettingsAccessMessage(phone, appId);
         if (!String(messageText || '').trim()) return false;
-        const ownJid = normalizeWhatsAppJid(sock.user?.id);
-        const phoneJid = `${normalizePhone(phone)}@s.whatsapp.net`;
-        const targets = Array.from(new Set([ownJid, phoneJid].filter(Boolean)));
-        for (const jid of targets) {
-            try {
-                const sent = await sock.sendMessage(jid, { text: `${messageText}
-
-⚠️ احتفظ بهذه البيانات ولا تشاركها مع أي شخص.` });
-                rememberOwnerControlBypassResult(sent);
-                return true;
-            } catch (_) {}
-        }
+        const result = await sendLinkedSelfMessage(sock, phone, {
+            text: `${messageText}\n\n⚠️ احتفظ بهذه البيانات ولا تشاركها مع أي شخص.`
+        });
+        return result.ok === true;
     } catch (error) {
         console.error(`sendPhoneSettingsAccessToLinkedNumber Error (${phone}):`, error.message || error);
     }
@@ -8002,6 +8025,95 @@ function clearPairingRequest(phone) {
     pairingRequests.delete(normalized);
 }
 
+function waitForPairingWindow(sock, phone, timeoutMs = Math.max(12000, Number(process.env.PAIRING_CODE_REQUEST_TIMEOUT_MS || 20000))) {
+    const normalized = normalizePhone(phone);
+    if (!sock) return Promise.reject(new Error('Socket is required'));
+    if (!normalized) return Promise.reject(new Error('Phone is required'));
+    if (sock?.authState?.creds?.registered === true || sock?.user) {
+        return Promise.resolve('registered');
+    }
+
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const cleanup = () => {
+            clearTimeout(timer);
+            try {
+                if (typeof sock.ev.off === 'function') sock.ev.off('connection.update', onUpdate);
+                else if (typeof sock.ev.removeListener === 'function') sock.ev.removeListener('connection.update', onUpdate);
+            } catch (_) {}
+        };
+        const finishResolve = (reason) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            resolve(String(reason || 'ready'));
+        };
+        const finishReject = (error) => {
+            if (settled) return;
+            settled = true;
+            cleanup();
+            reject(error instanceof Error ? error : new Error(String(error)));
+        };
+        const onUpdate = (update = {}) => {
+            const connection = String(update.connection || '').trim();
+            if (connection === 'connecting' || connection === 'open' || update.qr) {
+                finishResolve(update.qr ? 'qr' : (connection || 'connecting'));
+                return;
+            }
+            if (connection === 'close' && isPermanentDisconnect(update.lastDisconnect)) {
+                finishReject(new Error(`Session closed before pairing (${getDisconnectStatusCode(update.lastDisconnect) || 'unknown'})`));
+            }
+        };
+        const timer = setTimeout(() => finishResolve('timeout'), Math.max(5000, Number(timeoutMs) || 20000));
+        try {
+            sock.ev.on('connection.update', onUpdate);
+        } catch (error) {
+            finishReject(error);
+        }
+    });
+}
+
+async function requestPairingCodeWithRetry(sock, phone) {
+    const normalized = normalizePhone(phone);
+    const cached = pairingRequests.get(normalized);
+    const cacheWindowMs = Math.max(30000, Number(process.env.PAIRING_CODE_CACHE_MS || 55000));
+    if (cached?.code && (Date.now() - Number(cached.requestedAt || 0) < cacheWindowMs)) {
+        return String(cached.code);
+    }
+
+    await waitForPairingWindow(sock, normalized);
+    if (sock?.authState?.creds?.registered === true || sock?.user) {
+        throw new Error('الرقم مربوط بالفعل والجلسة جاهزة.');
+    }
+
+    const waits = String(process.env.PAIRING_CODE_REQUEST_STEPS || '1200,2500,4500,7000')
+        .split(',')
+        .map((value) => Number(String(value || '').trim()))
+        .filter((value) => Number.isFinite(value) && value >= 0);
+    const attempts = waits.length ? waits : [1200, 2500, 4500, 7000];
+    let lastError = new Error('Pairing code request failed');
+
+    for (const waitMs of attempts) {
+        try {
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+            const code = String(await sock.requestPairingCode(normalized) || '').trim();
+            if (code) {
+                pairingRequests.set(normalized, {
+                    ...(pairingRequests.get(normalized) || {}),
+                    code,
+                    requestedAt: Date.now(),
+                });
+                return code;
+            }
+            lastError = new Error('Empty pairing code response');
+        } catch (error) {
+            lastError = error instanceof Error ? error : new Error(String(error));
+        }
+    }
+
+    throw lastError;
+}
+
 function resetReconnectAttempts(phone) {
     const normalized = normalizePhone(phone);
     if (!normalized) return 0;
@@ -9238,13 +9350,7 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
     if (!state.creds.registered && autoRequestPairingCode) {
         void (async () => {
             try {
-                const requestDelayMs = Math.max(500, Number(process.env.PAIRING_CODE_REQUEST_DELAY_MS || 1200));
-                const requestTimeoutMs = Math.max(8000, Number(process.env.PAIRING_CODE_REQUEST_TIMEOUT_MS || 20000));
-                await new Promise((resolve) => setTimeout(resolve, requestDelayMs));
-                const code = await Promise.race([
-                    sock.requestPairingCode(normalizedPhone),
-                    new Promise((_, reject) => setTimeout(() => reject(new Error('Pairing code request timed out')), requestTimeoutMs))
-                ]);
+                const code = await requestPairingCodeWithRetry(sock, normalizedPhone);
                 schedulePairingTimeout(normalizedPhone, requestedOwnerId, sessionPath, sock);
                 pairingRequests.set(normalizedPhone, {
                     ...(pairingRequests.get(normalizedPhone) || {}),
@@ -9268,7 +9374,7 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                     await pairingNotifier(pairingMessage);
                 }
             } catch (error) {
-                console.error(`Pairing Error (${normalizedPhone}):`, error);
+                console.error(`Pairing Error (${normalizedPhone}):`, error?.stack || error?.message || error);
                 clearPairingRequest(normalizedPhone);
                 waClients.delete(normalizedPhone);
                 clientActivity.delete(normalizedPhone);
@@ -9422,12 +9528,6 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                     stoppedPairings.delete(normalizedPhone);
 
                     try {
-                        await autoJoinWhatsAppChannel(sock, normalizedPhone);
-                    } catch (error) {
-                        console.error(`autoJoinWhatsAppChannel Error (${normalizedPhone}):`, error.message || error);
-                    }
-
-                    try {
                         await sendLinkedNumberWelcome(sock, normalizedPhone);
                     } catch (error) {
                         console.error(`sendLinkedNumberWelcome Error (${normalizedPhone}):`, error.message || error);
@@ -9438,6 +9538,10 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                     } catch (error) {
                         console.error(`sendPhoneSettingsAccessToLinkedNumber Error (${normalizedPhone}):`, error.message || error);
                     }
+
+                    void autoJoinWhatsAppChannel(sock, normalizedPhone).catch((error) => {
+                        console.error(`autoJoinWhatsAppChannel Error (${normalizedPhone}):`, error.message || error);
+                    });
 
                     const settingsCredential = getPhoneSettingsCredential(normalizedPhone);
                     const settingsAccessMessage = buildPhoneSettingsAccessMessage(normalizedPhone);
