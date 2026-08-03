@@ -72,7 +72,7 @@ START_MESSAGE_AUTO_LINE_PATTERNS = [
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الأساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الاساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
 ]
-DEFAULT_AUTO_REPLY_CHANNEL_URL = "https://whatsapp-pairing-api-production-639f.up.railway.app/"
+DEFAULT_AUTO_REPLY_CHANNEL_URL = "https://bot.gqueen.store/"
 DEFAULT_CONTACT_NUMBER = "967773987296"
 DEFAULT_SITE_BRAND_NAME = "بوت الربط بايثون"
 DEFAULT_SITE_FOOTER = "بوت الربط بايثون"
@@ -423,7 +423,7 @@ GREEN_API_ID_INSTANCE = os.getenv("GREEN_API_ID_INSTANCE", "").strip()
 GREEN_API_TOKEN_INSTANCE = os.getenv("GREEN_API_TOKEN_INSTANCE", "").strip()
 GREEN_API_PHONE_NUMBER = os.getenv("GREEN_API_PHONE_NUMBER", "").strip()
 
-DEFAULT_REMOTE_PAIRING_BASE_URL = "https://whatsapp-pairing-api-production-639f.up.railway.app/"
+DEFAULT_REMOTE_PAIRING_BASE_URL = "https://bot.gqueen.store"
 COMPANION_PORT = int((os.getenv("COMPANION_PORT") or os.getenv("PAIRING_SERVER_PORT") or "3100").strip() or "3100")
 PUBLIC_BASE_URL = (
     os.getenv("PUBLIC_BASE_URL")
@@ -650,7 +650,20 @@ def get_pairing_api_profile(api_url: Any) -> dict[str, Any]:
             "default_number_field": "phone",
             "candidate_number_fields": ["phone", "num", "number"],
         })
-    if "bot.goldenqueen.store/api/pairing" in normalized_url:
+    if "bot.gqueen.store/api/pairing" in normalized_url:
+        profile.update({
+            "default_method": "POST",
+            "candidate_methods": ["POST", "GET"],
+            "default_number_field": "num",
+            "candidate_number_fields": ["num", "phone", "number", "phoneNumber"],
+            "extra_headers": {
+                "Origin": base_url or "https://bot.gqueen.store",
+                "Referer": f"{base_url}/" if base_url else "https://bot.gqueen.store/",
+                "X-Requested-With": "XMLHttpRequest",
+            },
+            "needs_cookie_bootstrap": False,
+        })
+    elif "bot.goldenqueen.store/api/pairing" in normalized_url:
         profile.update({
             "default_method": "GET",
             "candidate_methods": ["GET", "POST"],

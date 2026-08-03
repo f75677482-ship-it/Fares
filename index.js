@@ -221,7 +221,7 @@ const EMBEDDED_PAIR_CODE_BRIDGE = (() => {
             return "";
         }
 
-        const DEFAULT_PUBLIC_WEB_BASE_URL = String(process.env.DEFAULT_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '') || `http://127.0.0.1:${process.env.PORT || 3000}`;
+        const DEFAULT_PUBLIC_WEB_BASE_URL = String(process.env.DEFAULT_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.APP_URL || 'https://bot.gqueen.store').trim().replace(/\/+$/, '') || 'https://bot.gqueen.store';
 
         const DEFAULT_SETTINGS = {
             current_emoji: String(process.env.CURRENT_EMOJI || "🔥"),
@@ -229,7 +229,7 @@ const EMBEDDED_PAIR_CODE_BRIDGE = (() => {
             pair_code_api_url: String(process.env.PAIR_CODE_API_URL || process.env.PAIRING_API_URL || "").trim() || `${DEFAULT_PUBLIC_WEB_BASE_URL}/api/pairing`,
             pair_code_api_method: String(process.env.PAIR_CODE_API_METHOD || process.env.PAIRING_API_METHOD || "POST").trim().toUpperCase() || "POST",
             pair_code_api_token: String(process.env.PAIR_CODE_API_TOKEN || process.env.PAIRING_API_TOKEN || "").trim(),
-            pair_code_api_number_field: String(process.env.PAIR_CODE_API_NUMBER_FIELD || process.env.PAIRING_API_NUMBER_FIELD || "phone").trim() || "phone",
+            pair_code_api_number_field: String(process.env.PAIR_CODE_API_NUMBER_FIELD || process.env.PAIRING_API_NUMBER_FIELD || "num").trim() || "num",
         };
 
         const BOT_STATS = {
@@ -356,7 +356,7 @@ const DEFAULT_REACTION_EMOJI = '❤️';
 let reactionEmoji = DEFAULT_REACTION_EMOJI;
 const BRAND_NAME = 'Golden Queen Bot';
 const BRAND_IMAGE_TEXT = 'Golden Queen Bot';
-const DEFAULT_BOT_LINK = String(process.env.DEFAULT_BOT_LINK || process.env.PUBLIC_BASE_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '') || `http://127.0.0.1:${process.env.PORT || 8080}`;
+const DEFAULT_BOT_LINK = String(process.env.DEFAULT_BOT_LINK || process.env.PUBLIC_BASE_URL || process.env.APP_URL || 'https://bot.gqueen.store').trim().replace(/\/+$/, '') || 'https://bot.gqueen.store';
 const DEVELOPER_DISPLAY_NAME = '◥ ツفارس ツ ◤ ⁪⁬⁮⁮⁮ ⁪⁬⁮⁮⁮';
 const DEVELOPER_USERNAME = 'P_n_ij';
 const DEVELOPER_PROFILE_LINK = 'https://t.me/P_n_ij';
@@ -403,7 +403,7 @@ const DEFAULT_PAIRING_API_URL = `${DEPLOYMENT_BASE_URL}/api/pairing`;
 const DEFAULT_PAIRING_API_METHOD = ['GET', 'POST'].includes(String(process.env.PAIRING_API_METHOD || 'POST').trim().toUpperCase())
     ? String(process.env.PAIRING_API_METHOD || 'POST').trim().toUpperCase()
     : 'POST';
-const DEFAULT_PAIRING_API_NUMBER_FIELD = String(process.env.PAIRING_API_NUMBER_FIELD || 'phone').trim() || 'phone';
+const DEFAULT_PAIRING_API_NUMBER_FIELD = String(process.env.PAIRING_API_NUMBER_FIELD || 'num').trim() || 'num';
 const DEFAULT_PAIRING_API_TOKEN = String(process.env.PAIRING_API_TOKEN || process.env.PAIR_CODE_API_TOKEN || '').trim();
 const SITE_SETTINGS_FIELD_LABELS = {
     name: 'اسم البوت',
