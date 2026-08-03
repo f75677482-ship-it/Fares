@@ -4,12 +4,12 @@
   "description": "WhatsApp Bot",
   "main": "index.js",
   "scripts": {
-    "start": "node index.js",
-    "start:optimized": "node --max-old-space-size=512 --optimize-for-size --gc-interval=100 index.js",
+    "start": "python bot_core.py",
+    "start:optimized": "python bot_core.py",
     "cleanup": "node cleanup.js",
     "reset-session": "node reset-session.js",
-    "start:clean": "npm run cleanup && npm run start:optimized",
-    "start:fresh": "npm run reset-session && npm start",
+    "start:clean": "python bot_core.py",
+    "start:fresh": "python bot_core.py",
     "install:panel": "npm install --legacy-peer-deps",
     "install:force": "npm install --force",
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -58,6 +58,7 @@
     "phin": "^3.7.1",
     "pino": "^8.21.0",
     "qrcode": "^1.5.4",
+    "mongodb": "^6.0.0",
     "qrcode-reader": "^1.0.4",
     "qrcode-terminal": "^0.12.0",
     "request": "^2.88.2",
@@ -74,13 +75,12 @@
     "youtube-yts": "^2.0.0",
     "youtubedl-core": "^4.11.7",
     "yt-search": "^2.12.1",
-    "ytdl-core": "^4.11.5",
-    "mongodb": "^6.18.0"
+    "ytdl-core": "^4.11.5"
   },
   "overrides": {
     "jimp": "^1.6.0"
   },
   "engines": {
-    "node": ">=20.0.0"
+    "node": ">=18.0.0"
   }
 }
