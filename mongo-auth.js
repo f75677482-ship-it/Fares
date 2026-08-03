@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const { MongoClient } = require('mongodb');
 const { initAuthCreds, BufferJSON } = require('@whiskeysockets/baileys');
+const { SESSION_ROOT } = require('./lib/storagePaths');
 
 // يفضَّل وضع MONGODB_URI كمتغير بيئة بدلًا من النص الثابت
 // كلمة المرور معروضة في المحادثة → غيّرها فورًا من Atlas
@@ -53,7 +54,6 @@ function getCollection() {
 function deepClone(v) { return JSON.parse(JSON.stringify(v)); }
 
 
-const SESSION_ROOT = path.join(process.cwd(), 'sessions');
 
 function getSessionDir(phone = '') {
   const normalized = normalizePhone(phone);

@@ -13,12 +13,12 @@ const {
   delay,
 } = require('@whiskeysockets/baileys');
 const { pairingBridge } = require('./lib/pairingBridge');
+const { SESSION_ROOT } = require('./lib/storagePaths');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const PORT = Number(process.env.COMPANION_PORT || process.env.PAIRING_SERVER_PORT || 3100);
-const SESSION_ROOT = path.join(process.cwd(), 'sessions');
 const SESSION_INDEX_FILE = path.join(SESSION_ROOT, 'index.json');
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sockets = new Map();

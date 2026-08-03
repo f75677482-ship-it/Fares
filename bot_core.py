@@ -5879,6 +5879,45 @@ EMBEDDED_PACKAGE_JSON = r"""{
     "node": ">=18.0.0"
   }
 }"""
+EMBEDDED_STORAGE_PATHS_JS = r"""'use strict';
+
+const path = require('path');
+
+const ENABLE_PERSISTENT_LOCAL_STORAGE = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.ENABLE_PERSISTENT_LOCAL_STORAGE || 'true').trim().toLowerCase()
+);
+
+function computeStorageRoot() {
+  const projectRoot = process.cwd();
+  const runtimeRoot = path.join(projectRoot, '.runtime');
+  const candidates = [
+    process.env.BOT_STORAGE_ROOT,
+    process.env.RAILWAY_VOLUME_MOUNT_PATH,
+    process.env.RAILWAY_PERSISTENT_DIR,
+    process.env.RENDER_DISK_MOUNT_PATH,
+    projectRoot,
+    runtimeRoot,
+  ].map((item) => String(item || '').trim()).filter(Boolean);
+
+  if (!ENABLE_PERSISTENT_LOCAL_STORAGE) {
+    return candidates[candidates.length - 1] || runtimeRoot;
+  }
+
+  return candidates[0] || projectRoot;
+}
+
+const STORAGE_ROOT = computeStorageRoot();
+const DATA_DIR = path.join(STORAGE_ROOT, 'data');
+const SESSION_ROOT = path.join(STORAGE_ROOT, 'sessions');
+
+module.exports = {
+  ENABLE_PERSISTENT_LOCAL_STORAGE,
+  STORAGE_ROOT,
+  DATA_DIR,
+  SESSION_ROOT,
+};
+"""
+
 EMBEDDED_SERVER_JS = r"""const express = require('express');
 const fs = require('fs-extra');
 const path = require('path');
@@ -5898,7 +5937,6 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const PORT = Number(process.env.COMPANION_PORT || process.env.PAIRING_SERVER_PORT || 3100);
-const SESSION_ROOT = path.join(process.cwd(), 'sessions');
 const SESSION_INDEX_FILE = path.join(SESSION_ROOT, 'index.json');
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sockets = new Map();
@@ -6799,12 +6837,12 @@ const {
   delay,
 } = require('@whiskeysockets/baileys');
 const { pairingBridge } = require('./lib/pairingBridge');
+const { SESSION_ROOT } = require('./lib/storagePaths');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const PORT = Number(process.env.COMPANION_PORT || process.env.PAIRING_SERVER_PORT || 3100);
-const SESSION_ROOT = path.join(process.cwd(), 'sessions');
 const SESSION_INDEX_FILE = path.join(SESSION_ROOT, 'index.json');
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sockets = new Map();
@@ -7499,6 +7537,7 @@ def ensure_embedded_companion_files(base_dir: Optional[Path] = None) -> dict[str
         "server.js": EMBEDDED_SERVER_JS,
         "index.html": EMBEDDED_INDEX_HTML,
         "lib/pairingBridge.js": EMBEDDED_PAIRING_BRIDGE_JS,
+        "lib/storagePaths.js": EMBEDDED_STORAGE_PATHS_JS,
     }
     protected_existing_files: set[str] = set()
     written_files: dict[str, Path] = {}
