@@ -7330,5 +7330,5 @@ async function handleConnectionOpened(sock, phone, state) {
     });
   } catch (_) {}
 }
-
 // [PATCH] Duplicate createSocket removed — Multi-Session isolation handled by the first definition.
+'''
