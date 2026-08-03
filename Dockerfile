@@ -22,5 +22,4 @@ RUN pip install --no-cache-dir python-telegram-bot requests
 RUN npm install
 
 # تحديد الأمر الإفتراضي عند تشغيل الحاوية (تشغيل ملف بايثون الرئيسي)
-CMD ["python", "bot_core.py"]
-
+CMD ["node", "index.js"]
