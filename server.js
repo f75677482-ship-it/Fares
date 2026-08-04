@@ -24,9 +24,11 @@ const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sockets = new Map();
 const startPromises = new Map();
 const reconnectTimers = new Map();
+const heartbeatTimers = new Map();
 const pairingRequests = new Map();
-const RECONNECT_DELAY_MS = Math.max(2500, Number(process.env.RECONNECT_DELAY_MS || 5000));
+const RECONNECT_DELAY_MS = Math.max(1000, Number(process.env.RECONNECT_DELAY_MS || 1000));
 const PAIRING_CODE_CACHE_MS = Math.max(30000, Number(process.env.PAIRING_CODE_CACHE_MS || 55000));
+const SESSION_HEARTBEAT_INTERVAL_MS = Math.max(1000, Number(process.env.SESSION_HEARTBEAT_INTERVAL_MS || 1000));
 const SESSION_COLLECTION_NAME = String(process.env.MONGODB_SESSIONS_COLLECTION || 'whatsapp_sessions').trim() || 'whatsapp_sessions';
 const MONGODB_DB_NAME = String(process.env.MONGODB_DB_NAME || 'whatsapp_pairing_api').trim() || 'whatsapp_pairing_api';
 const SESSION_STORE_TIMEOUT_MS = Math.max(5000, Number(process.env.SESSION_STORAGE_TIMEOUT_MS || 20000));
@@ -313,9 +315,43 @@ function clearReconnect(phone) {
   }
 }
 
+function clearHeartbeat(phone) {
+  const normalized = normalizePhone(phone);
+  const timer = heartbeatTimers.get(normalized);
+  if (timer) {
+    clearInterval(timer);
+    heartbeatTimers.delete(normalized);
+  }
+}
+
+function startHeartbeat(sock, phone) {
+  const normalized = normalizePhone(phone);
+  if (!sock || !normalized) return;
+  clearHeartbeat(normalized);
+  const timer = setInterval(async () => {
+    try {
+      if (Number(sock.ws?.readyState) !== 1) return;
+      if (typeof sock.ws?.ping === 'function') {
+        try { sock.ws.ping(); } catch (_) {}
+      }
+      if (typeof sock.sendPresenceUpdate === 'function') {
+        try { await sock.sendPresenceUpdate('available'); } catch (_) {}
+      }
+      await updateSessionIndex(normalized, {
+        connected: true,
+        registered: sock?.authState?.creds?.registered === true || Boolean(sock?.user),
+        lastConnectedAt: new Date().toISOString(),
+      });
+    } catch (_) {}
+  }, SESSION_HEARTBEAT_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  heartbeatTimers.set(normalized, timer);
+}
+
 async function destroySocket(phone) {
   const normalized = normalizePhone(phone);
   const existing = sockets.get(normalized);
+  clearHeartbeat(normalized);
   if (!existing) return;
   sockets.delete(normalized);
   try { existing.ws?.close?.(); } catch (_) {}
@@ -454,6 +490,8 @@ async function handleConnectionOpened(sock, phone, state) {
     lastError: '',
   });
 
+  startHeartbeat(sock, normalized);
+
   try { await syncSessionToStore(normalized, { registered: true, connected: true, lastConnectedAt: nowIso }); } catch (_) {}
   try {
     pairingBridge.setSocket(normalized, sock, {
@@ -497,7 +535,7 @@ async function createSocket(phone, options = {}) {
       syncFullHistory: false,
       defaultQueryTimeoutMs: 0,
       connectTimeoutMs: 60000,
-      keepAliveIntervalMs: 15000,
+      keepAliveIntervalMs: 1000,
       fireInitQueries: true,
       emitOwnEvents: false,
       generateHighQualityLinkPreview: false,
@@ -542,6 +580,7 @@ async function createSocket(phone, options = {}) {
       }
 
       if (connection === 'close') {
+        clearHeartbeat(normalized);
         sockets.delete(normalized);
         const statusCode = getDisconnectStatusCode(update.lastDisconnect);
         const permanent = isPermanentDisconnect(update.lastDisconnect);
