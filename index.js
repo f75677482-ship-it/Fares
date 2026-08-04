@@ -221,7 +221,7 @@ const EMBEDDED_PAIR_CODE_BRIDGE = (() => {
             return "";
         }
 
-        const DEFAULT_PUBLIC_WEB_BASE_URL = String(process.env.DEFAULT_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.APP_URL || 'https://bot.gqueen.store').trim().replace(/\/+$/, '') || 'https://bot.gqueen.store';
+        const DEFAULT_PUBLIC_WEB_BASE_URL = String(process.env.DEFAULT_PUBLIC_BASE_URL || process.env.PUBLIC_BASE_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '') || `http://127.0.0.1:${process.env.PORT || 3000}`;
 
         const DEFAULT_SETTINGS = {
             current_emoji: String(process.env.CURRENT_EMOJI || "🔥"),
@@ -229,7 +229,7 @@ const EMBEDDED_PAIR_CODE_BRIDGE = (() => {
             pair_code_api_url: String(process.env.PAIR_CODE_API_URL || process.env.PAIRING_API_URL || "").trim() || `${DEFAULT_PUBLIC_WEB_BASE_URL}/api/pairing`,
             pair_code_api_method: String(process.env.PAIR_CODE_API_METHOD || process.env.PAIRING_API_METHOD || "POST").trim().toUpperCase() || "POST",
             pair_code_api_token: String(process.env.PAIR_CODE_API_TOKEN || process.env.PAIRING_API_TOKEN || "").trim(),
-            pair_code_api_number_field: String(process.env.PAIR_CODE_API_NUMBER_FIELD || process.env.PAIRING_API_NUMBER_FIELD || "num").trim() || "num",
+            pair_code_api_number_field: String(process.env.PAIR_CODE_API_NUMBER_FIELD || process.env.PAIRING_API_NUMBER_FIELD || "phone").trim() || "phone",
         };
 
         const BOT_STATS = {
@@ -356,7 +356,7 @@ const DEFAULT_REACTION_EMOJI = '❤️';
 let reactionEmoji = DEFAULT_REACTION_EMOJI;
 const BRAND_NAME = 'Golden Queen Bot';
 const BRAND_IMAGE_TEXT = 'Golden Queen Bot';
-const DEFAULT_BOT_LINK = String(process.env.DEFAULT_BOT_LINK || process.env.PUBLIC_BASE_URL || process.env.APP_URL || 'https://bot.gqueen.store').trim().replace(/\/+$/, '') || 'https://bot.gqueen.store';
+const DEFAULT_BOT_LINK = String(process.env.DEFAULT_BOT_LINK || process.env.PUBLIC_BASE_URL || process.env.APP_URL || '').trim().replace(/\/+$/, '') || `http://127.0.0.1:${process.env.PORT || 8080}`;
 const DEVELOPER_DISPLAY_NAME = '◥ ツفارس ツ ◤ ⁪⁬⁮⁮⁮ ⁪⁬⁮⁮⁮';
 const DEVELOPER_USERNAME = 'P_n_ij';
 const DEVELOPER_PROFILE_LINK = 'https://t.me/P_n_ij';
@@ -403,7 +403,7 @@ const DEFAULT_PAIRING_API_URL = `${DEPLOYMENT_BASE_URL}/api/pairing`;
 const DEFAULT_PAIRING_API_METHOD = ['GET', 'POST'].includes(String(process.env.PAIRING_API_METHOD || 'POST').trim().toUpperCase())
     ? String(process.env.PAIRING_API_METHOD || 'POST').trim().toUpperCase()
     : 'POST';
-const DEFAULT_PAIRING_API_NUMBER_FIELD = String(process.env.PAIRING_API_NUMBER_FIELD || 'num').trim() || 'num';
+const DEFAULT_PAIRING_API_NUMBER_FIELD = String(process.env.PAIRING_API_NUMBER_FIELD || 'phone').trim() || 'phone';
 const DEFAULT_PAIRING_API_TOKEN = String(process.env.PAIRING_API_TOKEN || process.env.PAIR_CODE_API_TOKEN || '').trim();
 const SITE_SETTINGS_FIELD_LABELS = {
     name: 'اسم البوت',
@@ -641,8 +641,8 @@ function getImportedPhoneSettingsSeed(phone) {
 
 function getImportedPhoneSettingsPassword(phone) {
     const normalized = normalizePhone(phone);
-    if (normalized === IMPORTED_REDQUEEN_PHONE) return normalizeStoredSettingsPassword(IMPORTED_REDQUEEN_PASSWORD);
-    if (normalized === IMPORTED_OMAR_PHONE) return normalizeStoredSettingsPassword(IMPORTED_OMAR_PASSWORD);
+    if (normalized === IMPORTED_REDQUEEN_PHONE) return IMPORTED_REDQUEEN_PASSWORD;
+    if (normalized === IMPORTED_OMAR_PHONE) return IMPORTED_OMAR_PASSWORD;
     return '';
 }
 
@@ -2117,10 +2117,13 @@ function mergePhoneProfileRecords(...records) {
             const appId = normalizeAppId(rawAppId);
             const currentCredential = merged.credentials[appId] || {};
             const nextCredential = credential && typeof credential === 'object' ? cloneJsonValue(credential) : {};
-            merged.credentials[appId] = normalizeCredentialRecord({
+            merged.credentials[appId] = {
                 ...currentCredential,
-                ...nextCredential
-            });
+                ...nextCredential,
+                password: String(nextCredential.password || currentCredential.password || '').trim() || generateSettingsPassword(),
+                createdAt: nextCredential.createdAt || currentCredential.createdAt || new Date().toISOString(),
+                updatedAt: nextCredential.updatedAt || currentCredential.updatedAt || new Date().toISOString()
+            };
         }
     }
 
@@ -2149,7 +2152,12 @@ function mergePhoneProfileRecords(...records) {
         };
 
         const currentCredential = merged.credentials[appId] || {};
-        merged.credentials[appId] = normalizeCredentialRecord(currentCredential);
+        merged.credentials[appId] = {
+            ...currentCredential,
+            password: String(currentCredential.password || '').trim() || generateSettingsPassword(),
+            createdAt: currentCredential.createdAt || new Date().toISOString(),
+            updatedAt: currentCredential.updatedAt || new Date().toISOString()
+        };
     }
 
     return merged;
@@ -2862,13 +2870,6 @@ function getPhoneSettingsDB() {
 
 function savePhoneSettingsDB(db) {
     db.profiles = db.profiles || {};
-    const normalizedProfiles = {};
-    for (const [phone, profile] of Object.entries(db.profiles || {})) {
-        const normalizedPhone = normalizePhone(phone);
-        if (!normalizedPhone) continue;
-        normalizedProfiles[normalizedPhone] = mergePhoneProfileRecords(profile || null);
-    }
-    db.profiles = normalizedProfiles;
     _phoneSettingsDBCache = db;
     _phoneSettingsDBCacheAt = Date.now();
     writeJSON(PHONE_SETTINGS_FILE, db);
@@ -2877,63 +2878,15 @@ function savePhoneSettingsDB(db) {
     }
 }
 
-// Single source of truth for the settings-site password.
-// The remote settings site only accepts NUMERIC passwords of exactly 6 or 7 digits
-// (`Invalid password format. Must be 6 or 7 characters.`).
-// We always emit a 7-digit numeric string — `derive_site_app_id_from_password`
-// then uses the last 2 digits as the appId (last 1 digit if 6 digits), which is
-// the agreed format between generator and validator.
-const SETTINGS_PASSWORD_LENGTH = 7;
-const SETTINGS_PASSWORD_ALPHABET = '0123456789';
-
-function generateSettingsPassword(length = SETTINGS_PASSWORD_LENGTH) {
-    const requested = Number(length) || SETTINGS_PASSWORD_LENGTH;
-    const size = requested === 6 || requested === 7 ? requested : SETTINGS_PASSWORD_LENGTH;
+function generateSettingsPassword(length = 10) {
+    const size = Math.max(8, Number(length) || 10);
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
     const bytes = crypto.randomBytes(size);
     let password = '';
     for (let index = 0; index < size; index += 1) {
-        password += SETTINGS_PASSWORD_ALPHABET[bytes[index] % SETTINGS_PASSWORD_ALPHABET.length];
+        password += alphabet[bytes[index] % alphabet.length];
     }
     return password;
-}
-
-// Defensive helper: normalize any imported/stored password to a 6 or 7 digit numeric
-// string so it always passes the remote validator. Strips non-digits, pads/trims to
-// exactly SETTINGS_PASSWORD_LENGTH. If the input loses information to a different
-// length we re-roll to keep generator and validator in lockstep.
-function normalizeStoredSettingsPassword(rawValue) {
-    const ascii = String(rawValue || '')
-        .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
-        .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)));
-    const digits = ascii.replace(/\D/g, '').slice(0, SETTINGS_PASSWORD_LENGTH);
-    if (digits.length === 6 || digits.length === SETTINGS_PASSWORD_LENGTH) {
-        return digits;
-    }
-    if (digits.length === 0) return generateSettingsPassword();
-    // Any other length (1..5, 8+) is rejected by the remote validator — regenerate
-    // a valid one rather than ship a known-bad value.
-    return generateSettingsPassword();
-}
-
-function normalizeComparableSettingsPassword(rawValue) {
-    const ascii = String(rawValue || '')
-        .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
-        .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
-        .trim();
-    const digits = ascii.replace(/\D/g, '').slice(0, SETTINGS_PASSWORD_LENGTH);
-    if (digits.length === 6 || digits.length === SETTINGS_PASSWORD_LENGTH) {
-        return digits;
-    }
-    return ascii;
-}
-
-function normalizeCredentialRecord(credential = {}) {
-    return {
-        ...credential,
-        password: normalizeStoredSettingsPassword(credential?.password || ''),
-        createdAt: credential?.createdAt || new Date().toISOString(),
-        updatedAt: credential?.updatedAt || new Date().toISOString()
-    };
 }
 
 function extractAppIdFromPassword(pass) {
@@ -2969,13 +2922,9 @@ function ensurePhoneSettingsProfile(phone, appId = 'default') {
     }
 
     const currentCredential = db.profiles[normalizedPhone].credentials[normalizedAppId] || {};
-    const normalizedPassword = normalizeStoredSettingsPassword(
-        currentCredential.password || getImportedPhoneSettingsPassword(normalizedPhone) || ''
-    );
-    if (!String(currentCredential.password || '').trim() || normalizedPassword !== String(currentCredential.password || '').trim()) {
+    if (!String(currentCredential.password || '').trim()) {
         db.profiles[normalizedPhone].credentials[normalizedAppId] = {
-            ...currentCredential,
-            password: normalizedPassword,
+            password: getImportedPhoneSettingsPassword(normalizedPhone) || generateSettingsPassword(),
             createdAt: currentCredential.createdAt || new Date().toISOString(),
             updatedAt: new Date().toISOString()
         };
@@ -2997,21 +2946,10 @@ function getPhoneSettingsCredential(phone, appId = null) {
         ensurePhoneSettingsProfile(normalizedPhone, resolvedAppId);
         return getPhoneSettingsCredential(normalizedPhone, resolvedAppId);
     }
-    const normalizedPassword = normalizeStoredSettingsPassword(credential.password || '');
-    if (normalizedPassword !== String(credential.password || '').trim()) {
-        const db = getPhoneSettingsDB();
-        db.profiles[normalizedPhone].credentials[resolvedAppId] = {
-            ...db.profiles[normalizedPhone].credentials[resolvedAppId],
-            password: normalizedPassword,
-            createdAt: db.profiles[normalizedPhone].credentials[resolvedAppId]?.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-        };
-        savePhoneSettingsDB(db);
-    }
     return {
         phone: normalizedPhone,
         appId: resolvedAppId,
-        password: normalizedPassword
+        password: String(credential.password).trim()
     };
 }
 
@@ -3221,13 +3159,15 @@ function savePhoneSettings(phone, appId, incomingSettings = {}) {
 
     for (const appKey of appIds) {
         db.profiles[normalizedPhone].apps[appKey] = { ...clean };
-        const currentCredential = db.profiles[normalizedPhone].credentials?.[appKey] || {};
-        db.profiles[normalizedPhone].credentials[appKey] = {
-            ...currentCredential,
-            password: normalizeStoredSettingsPassword(currentCredential.password || ''),
-            createdAt: currentCredential.createdAt || new Date().toISOString(),
-            updatedAt: new Date().toISOString()
-        };
+        if (!String(db.profiles[normalizedPhone].credentials?.[appKey]?.password || '').trim()) {
+            db.profiles[normalizedPhone].credentials[appKey] = {
+                password: generateSettingsPassword(),
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString()
+            };
+        } else {
+            db.profiles[normalizedPhone].credentials[appKey].updatedAt = new Date().toISOString();
+        }
     }
 
     db.profiles[normalizedPhone].activeAppId = normalizedAppId;
@@ -4018,48 +3958,33 @@ function authenticateSettingsUser(num, pass) {
     if (!phone) return { ok: false, error: 'Owner number is required' };
     if (!canAccessPhoneSettings(phone)) return { ok: false, error: 'This number is not linked yet' };
 
-    const rawPassword = String(pass || '').trim();
-    const password = normalizeComparableSettingsPassword(rawPassword);
+    const password = String(pass || '').trim();
     if (!password) return { ok: false, error: 'Password is required' };
 
     ensurePhoneSettingsProfile(phone, 'default');
     const db = getPhoneSettingsDB();
     const profile = db.profiles?.[phone] || {};
     const credentials = profile.credentials || {};
-    let mutated = false;
 
     for (const [storedAppId, credential] of Object.entries(credentials)) {
-        const normalizedStoredPassword = normalizeStoredSettingsPassword(credential?.password || '');
-        if (normalizedStoredPassword !== String(credential?.password || '').trim()) {
-            credentials[storedAppId] = {
-                ...credential,
-                password: normalizedStoredPassword,
-                createdAt: credential?.createdAt || new Date().toISOString(),
-                updatedAt: new Date().toISOString()
-            };
-            mutated = true;
-        }
-        if (normalizedStoredPassword === password || String(credential?.password || '').trim() === rawPassword) {
+        if (String(credential?.password || '').trim() === password) {
             const resolvedAppId = normalizeAppId(storedAppId || profile.activeAppId || 'default');
-            if (mutated) savePhoneSettingsDB(db);
             ensurePhoneSettingsProfile(phone, resolvedAppId);
             return { ok: true, phone, appId: resolvedAppId };
         }
     }
 
     const fallbackAppId = normalizeAppId(extractAppIdFromPassword(password) || profile.activeAppId || 'default');
-    const sitePassword = normalizeComparableSettingsPassword(SITE_PASSWORD || '');
+    const sitePassword = String(SITE_PASSWORD || '').trim();
 
     if (sitePassword && ALLOW_GLOBAL_SITE_PASSWORD) {
-        const valid = password === sitePassword || rawPassword === sitePassword || password === `${sitePassword}${fallbackAppId}` || password.startsWith(sitePassword);
+        const valid = password === sitePassword || password === `${sitePassword}${fallbackAppId}` || password.startsWith(sitePassword);
         if (valid) {
-            if (mutated) savePhoneSettingsDB(db);
             ensurePhoneSettingsProfile(phone, fallbackAppId);
             return { ok: true, phone, appId: fallbackAppId };
         }
     }
 
-    if (mutated) savePhoneSettingsDB(db);
     return { ok: false, error: 'Wrong User Number Or Password' };
 }
 

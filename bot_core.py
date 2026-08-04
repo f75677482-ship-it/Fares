@@ -72,7 +72,7 @@ START_MESSAGE_AUTO_LINE_PATTERNS = [
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الأساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الاساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
 ]
-DEFAULT_AUTO_REPLY_CHANNEL_URL = "https://bot.gqueen.store/"
+DEFAULT_AUTO_REPLY_CHANNEL_URL = "https://whatsapp-pairing-api-production-639f.up.railway.app/"
 DEFAULT_CONTACT_NUMBER = "967773987296"
 DEFAULT_SITE_BRAND_NAME = "بوت الربط بايثون"
 DEFAULT_SITE_FOOTER = "بوت الربط بايثون"
@@ -423,7 +423,7 @@ GREEN_API_ID_INSTANCE = os.getenv("GREEN_API_ID_INSTANCE", "").strip()
 GREEN_API_TOKEN_INSTANCE = os.getenv("GREEN_API_TOKEN_INSTANCE", "").strip()
 GREEN_API_PHONE_NUMBER = os.getenv("GREEN_API_PHONE_NUMBER", "").strip()
 
-DEFAULT_REMOTE_PAIRING_BASE_URL = "https://bot.gqueen.store"
+DEFAULT_REMOTE_PAIRING_BASE_URL = "https://whatsapp-pairing-api-production-639f.up.railway.app/"
 COMPANION_PORT = int((os.getenv("COMPANION_PORT") or os.getenv("PAIRING_SERVER_PORT") or "3100").strip() or "3100")
 PUBLIC_BASE_URL = (
     os.getenv("PUBLIC_BASE_URL")
@@ -650,20 +650,7 @@ def get_pairing_api_profile(api_url: Any) -> dict[str, Any]:
             "default_number_field": "phone",
             "candidate_number_fields": ["phone", "num", "number"],
         })
-    if "bot.gqueen.store/api/pairing" in normalized_url:
-        profile.update({
-            "default_method": "POST",
-            "candidate_methods": ["POST", "GET"],
-            "default_number_field": "num",
-            "candidate_number_fields": ["num", "phone", "number", "phoneNumber"],
-            "extra_headers": {
-                "Origin": base_url or "https://bot.gqueen.store",
-                "Referer": f"{base_url}/" if base_url else "https://bot.gqueen.store/",
-                "X-Requested-With": "XMLHttpRequest",
-            },
-            "needs_cookie_bootstrap": False,
-        })
-    elif "bot.goldenqueen.store/api/pairing" in normalized_url:
+    if "bot.goldenqueen.store/api/pairing" in normalized_url:
         profile.update({
             "default_method": "GET",
             "candidate_methods": ["GET", "POST"],
@@ -1616,7 +1603,7 @@ def store_manual_site_login(user, number: str, password: str, settings_url: str 
         return {}
     normalized_number = normalize_phone_number(number)
     site_password = normalize_site_password(password)
-    if not normalized_number or not is_valid_site_password(site_password):
+    if not normalized_number or not site_password:
         return {}
 
     existing = LINKED_WHATSAPP_USERS.get(normalized_number, {})
@@ -1928,14 +1915,13 @@ def record_belongs_to_user(record: Any, user_id: int) -> bool:
 def extract_site_password_from_record(record: Any) -> str:
     if not isinstance(record, dict):
         return ""
-    password_text = normalize_site_password(
+    return normalize_site_password(
         record.get("site_password")
         or record.get("password")
         or record.get("pass")
         or record.get("pwd")
         or record.get("settings_password")
     )
-    return password_text if is_valid_site_password(password_text) else ""
 
 
 def extract_numeric_tokens_from_text(text_value: Any, min_digits: int = 4, max_digits: int = 15) -> list[str]:
@@ -3629,39 +3615,6 @@ def normalize_site_password(raw_value: Any) -> str:
     return normalize_ascii_digits(str(raw_value or "").strip())
 
 
-# Single source of truth for the settings-site password length.
-# The remote settings site only accepts passwords of exactly 6 or 7 numeric digits
-# (`Invalid password format. Must be 6 or 7 characters.`). Generator and
-# validator stay aligned via these constants.
-SETTINGS_PASSWORD_MIN_LENGTH = 6
-SETTINGS_PASSWORD_MAX_LENGTH = 7
-SETTINGS_PASSWORD_LENGTH = 7
-
-
-def is_valid_site_password(raw_value: Any) -> bool:
-    password_text = normalize_site_password(raw_value)
-    return bool(re.fullmatch(r"\d{6,7}", password_text))
-
-
-def ensure_valid_site_password(raw_value: Any) -> str:
-    """Normalize a password; if remote validator would reject it, regenerate."""
-    password_text = normalize_site_password(raw_value)
-    if is_valid_site_password(password_text):
-        return password_text
-    return generate_site_password()
-
-
-def generate_site_password(length: int = SETTINGS_PASSWORD_LENGTH) -> str:
-    """Generate a numeric site password accepted by the remote validator."""
-    import secrets as _secrets
-
-    target_len = SETTINGS_PASSWORD_LENGTH if length not in (
-        SETTINGS_PASSWORD_MIN_LENGTH,
-        SETTINGS_PASSWORD_MAX_LENGTH,
-    ) else length
-    return "".join(str(_secrets.randbelow(10)) for _ in range(target_len))
-
-
 def derive_site_app_id_from_password(password: Any) -> str:
     password_text = normalize_site_password(password)
     if len(password_text) == 6:
@@ -3679,11 +3632,8 @@ def extract_pairing_site_metadata(payload: Any) -> dict[str, str]:
     password = normalize_site_password(
         extract_scalar_from_payload(payload, {"password", "pass", "pwd", "site_password", "settings_password", "owner_password", "ownerpass", "owner_pass"})
     )
-    if password and not is_valid_site_password(password):
-        password = ""
     if not password:
-        candidate_password = extract_site_password_from_message_text(message_text)
-        password = candidate_password if is_valid_site_password(candidate_password) else ""
+        password = extract_site_password_from_message_text(message_text)
 
     app_id = str(
         extract_scalar_from_payload(
