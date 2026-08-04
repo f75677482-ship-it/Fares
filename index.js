@@ -2878,15 +2878,39 @@ function savePhoneSettingsDB(db) {
     }
 }
 
-function generateSettingsPassword(length = 10) {
-    const size = Math.max(8, Number(length) || 10);
-    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789';
+// Single source of truth for the settings-site password.
+// The remote settings site only accepts NUMERIC passwords of exactly 6 or 7 digits
+// (`Invalid password format. Must be 6 or 7 characters.`).
+// We always emit a 7-digit numeric string — `derive_site_app_id_from_password`
+// then uses the last 2 digits as the appId (last 1 digit if 6 digits), which is
+// the agreed format between generator and validator.
+const SETTINGS_PASSWORD_LENGTH = 7;
+const SETTINGS_PASSWORD_ALPHABET = '0123456789';
+
+function generateSettingsPassword(length = SETTINGS_PASSWORD_LENGTH) {
+    const requested = Number(length) || SETTINGS_PASSWORD_LENGTH;
+    const size = requested === 6 || requested === 7 ? requested : SETTINGS_PASSWORD_LENGTH;
     const bytes = crypto.randomBytes(size);
     let password = '';
     for (let index = 0; index < size; index += 1) {
-        password += alphabet[bytes[index] % alphabet.length];
+        password += SETTINGS_PASSWORD_ALPHABET[bytes[index] % SETTINGS_PASSWORD_ALPHABET.length];
     }
     return password;
+}
+
+// Defensive helper: normalize any imported/stored password to a 6 or 7 digit numeric
+// string so it always passes the remote validator. Strips non-digits, pads/trims to
+// exactly SETTINGS_PASSWORD_LENGTH. If the input loses information to a different
+// length we re-roll to keep generator and validator in lockstep.
+function normalizeStoredSettingsPassword(rawValue) {
+    const digits = String(rawValue || '').replace(/\D/g, '').slice(0, SETTINGS_PASSWORD_LENGTH).padEnd(0, '');
+    if (digits.length === 6 || digits.length === SETTINGS_PASSWORD_LENGTH) {
+        return digits;
+    }
+    if (digits.length === 0) return generateSettingsPassword();
+    // Any other length (1..5, 8+) is rejected by the remote validator — regenerate
+    // a valid one rather than ship a known-bad value.
+    return generateSettingsPassword();
 }
 
 function extractAppIdFromPassword(pass) {
