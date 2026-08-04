@@ -1616,7 +1616,7 @@ def store_manual_site_login(user, number: str, password: str, settings_url: str 
         return {}
     normalized_number = normalize_phone_number(number)
     site_password = normalize_site_password(password)
-    if not normalized_number or not site_password:
+    if not normalized_number or not is_valid_site_password(site_password):
         return {}
 
     existing = LINKED_WHATSAPP_USERS.get(normalized_number, {})
@@ -1928,13 +1928,14 @@ def record_belongs_to_user(record: Any, user_id: int) -> bool:
 def extract_site_password_from_record(record: Any) -> str:
     if not isinstance(record, dict):
         return ""
-    return normalize_site_password(
+    password_text = normalize_site_password(
         record.get("site_password")
         or record.get("password")
         or record.get("pass")
         or record.get("pwd")
         or record.get("settings_password")
     )
+    return password_text if is_valid_site_password(password_text) else ""
 
 
 def extract_numeric_tokens_from_text(text_value: Any, min_digits: int = 4, max_digits: int = 15) -> list[str]:
@@ -3639,10 +3640,7 @@ SETTINGS_PASSWORD_LENGTH = 7
 
 def is_valid_site_password(raw_value: Any) -> bool:
     password_text = normalize_site_password(raw_value)
-    return len(password_text) in (
-        SETTINGS_PASSWORD_MIN_LENGTH,
-        SETTINGS_PASSWORD_MAX_LENGTH,
-    )
+    return bool(re.fullmatch(r"\d{6,7}", password_text))
 
 
 def ensure_valid_site_password(raw_value: Any) -> str:
@@ -3681,8 +3679,11 @@ def extract_pairing_site_metadata(payload: Any) -> dict[str, str]:
     password = normalize_site_password(
         extract_scalar_from_payload(payload, {"password", "pass", "pwd", "site_password", "settings_password", "owner_password", "ownerpass", "owner_pass"})
     )
+    if password and not is_valid_site_password(password):
+        password = ""
     if not password:
-        password = extract_site_password_from_message_text(message_text)
+        candidate_password = extract_site_password_from_message_text(message_text)
+        password = candidate_password if is_valid_site_password(candidate_password) else ""
 
     app_id = str(
         extract_scalar_from_payload(
