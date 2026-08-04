@@ -1582,6 +1582,42 @@ def register_pending_pairing(user, number: str, code: str = "", site_metadata: O
     normalized_number = normalize_phone_number(number)
     if not normalized_number:
         return
+    # ============================================================
+    # Defense-in-depth: one-number-per-Telegram-user (added per
+    # project owner request). The plain-text message handler
+    # already rejects a second pairing with a clear Arabic reply;
+    # this fallback guards any code path that bypasses it.
+    # Bot admin is exempt for testing/support purposes.
+    # ============================================================
+    try:
+        target_user_id = int(getattr(user, "id", 0) or 0)
+    except Exception:
+        target_user_id = 0
+    try:
+        is_admin_caller = bool(ADMIN_ID and target_user_id == int(ADMIN_ID))
+    except Exception:
+        is_admin_caller = False
+    if target_user_id and not is_admin_caller:
+        for storage_name, storage in (("linked", LINKED_WHATSAPP_USERS), ("pending", PENDING_PAIRINGS)):
+            for raw_existing, payload in storage.items():
+                if not isinstance(payload, dict):
+                    continue
+                try:
+                    payload_uid = int(payload.get("telegram_user_id") or 0)
+                except Exception:
+                    continue
+                if payload_uid != target_user_id:
+                    continue
+                existing_number = normalize_phone_number(
+                    payload.get("whatsapp_number") or raw_existing
+                )
+                if existing_number and existing_number != normalized_number:
+                    logger.info(
+                        "One-number-per-user guard rejected second pairing for user %s (existing=%s, attempted=%s)",
+                        target_user_id, existing_number, normalized_number,
+                    )
+                    return
+    # ============================================================
     existing = PENDING_PAIRINGS.get(normalized_number, {})
     record = dict(existing) if isinstance(existing, dict) else {}
     record.update({
@@ -5776,6 +5812,59 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not number or len(number) < 8 or len(number) > 15:
         await update.message.reply_text(pair_texts["invalid_number"])
         return
+
+    # ============================================================
+    # One-number-per-user enforcement (added per project owner request):
+    # Each Telegram user may own at most ONE active WhatsApp number
+    # via this bot. If a different number is already owned (linked or
+    # pending), reject the new pairing with a clear Arabic message
+    # and direct the user to the unlink command/button. The admin is
+    # exempt to allow testing and support operations. Re-pairing the
+    # SAME number is allowed so users can refresh their pair code.
+    # ============================================================
+    current_user = update.effective_user
+    if current_user is not None and not is_admin(update):
+        existing_owner_user_id = 0
+        existing_active_number = ""
+        for raw_existing, payload in LINKED_WHATSAPP_USERS.items():
+            if not isinstance(payload, dict):
+                continue
+            try:
+                payload_uid = int(payload.get("telegram_user_id") or 0)
+            except Exception:
+                continue
+            if payload_uid == current_user.id:
+                existing_active_number = normalize_phone_number(
+                    payload.get("whatsapp_number") or raw_existing
+                )
+                break
+        if not existing_active_number:
+            for raw_existing, payload in PENDING_PAIRINGS.items():
+                if not isinstance(payload, dict):
+                    continue
+                try:
+                    payload_uid = int(payload.get("telegram_user_id") or 0)
+                except Exception:
+                    continue
+                if payload_uid == current_user.id:
+                    existing_active_number = normalize_phone_number(
+                        payload.get("whatsapp_number") or raw_existing
+                    )
+                    break
+        if existing_active_number and existing_active_number != number:
+            context.user_data["awaiting_pair_number"] = False
+            context.user_data.pop("selected_pair_language", None)
+            await update.message.reply_text(
+                "❌ لا يمكنك ربط رقم جديد لأن لديك رقم مربوط بالفعل بهذا البوت.\n\n"
+                f"📞 رقمك المربوط حالياً: {existing_active_number}\n\n"
+                "🔓 لإضافة رقم جديد يجب أولاً إلغاء ربط الرقم الحالي "
+                "من خلال زر «❌ إلغاء ربط رقمك» الموجود في القائمة الرئيسية، "
+                "أو من خلال الأمر /unlink.\n"
+                "بعد الإلغاء أعد المحاولة وسيُسمح لك بربط الرقم الجديد.",
+                reply_markup=build_main_keyboard(admin=is_admin(update)),
+            )
+            return
+    # ============================================================
 
     context.user_data["awaiting_pair_number"] = False
     BOT_STATS["pair_requests"] += 1
