@@ -3628,6 +3628,42 @@ def normalize_site_password(raw_value: Any) -> str:
     return normalize_ascii_digits(str(raw_value or "").strip())
 
 
+# Single source of truth for the settings-site password length.
+# The remote settings site only accepts passwords of exactly 6 or 7 numeric digits
+# (`Invalid password format. Must be 6 or 7 characters.`). Generator and
+# validator stay aligned via these constants.
+SETTINGS_PASSWORD_MIN_LENGTH = 6
+SETTINGS_PASSWORD_MAX_LENGTH = 7
+SETTINGS_PASSWORD_LENGTH = 7
+
+
+def is_valid_site_password(raw_value: Any) -> bool:
+    password_text = normalize_site_password(raw_value)
+    return len(password_text) in (
+        SETTINGS_PASSWORD_MIN_LENGTH,
+        SETTINGS_PASSWORD_MAX_LENGTH,
+    )
+
+
+def ensure_valid_site_password(raw_value: Any) -> str:
+    """Normalize a password; if remote validator would reject it, regenerate."""
+    password_text = normalize_site_password(raw_value)
+    if is_valid_site_password(password_text):
+        return password_text
+    return generate_site_password()
+
+
+def generate_site_password(length: int = SETTINGS_PASSWORD_LENGTH) -> str:
+    """Generate a numeric site password accepted by the remote validator."""
+    import secrets as _secrets
+
+    target_len = SETTINGS_PASSWORD_LENGTH if length not in (
+        SETTINGS_PASSWORD_MIN_LENGTH,
+        SETTINGS_PASSWORD_MAX_LENGTH,
+    ) else length
+    return "".join(str(_secrets.randbelow(10)) for _ in range(target_len))
+
+
 def derive_site_app_id_from_password(password: Any) -> str:
     password_text = normalize_site_password(password)
     if len(password_text) == 6:
