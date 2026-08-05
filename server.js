@@ -1,11 +1,8 @@
-require('./lib/registerProjectAliases');
-
 const express = require('express');
 const fs = require('fs-extra');
 const path = require('path');
 const pino = require('pino');
 const { MongoClient } = require('mongodb');
-const handler = require('./handler');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -16,22 +13,20 @@ const {
   delay,
 } = require('@whiskeysockets/baileys');
 const { pairingBridge } = require('./lib/pairingBridge');
-const { SESSION_ROOT } = require('./lib/storagePaths');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const PORT = Number(process.env.COMPANION_PORT || process.env.PAIRING_SERVER_PORT || 3100);
+const SESSION_ROOT = path.join(process.cwd(), 'sessions');
 const SESSION_INDEX_FILE = path.join(SESSION_ROOT, 'index.json');
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sockets = new Map();
 const startPromises = new Map();
 const reconnectTimers = new Map();
-const heartbeatTimers = new Map();
 const pairingRequests = new Map();
-const RECONNECT_DELAY_MS = Math.max(1000, Number(process.env.RECONNECT_DELAY_MS || 1000));
+const RECONNECT_DELAY_MS = Math.max(2500, Number(process.env.RECONNECT_DELAY_MS || 5000));
 const PAIRING_CODE_CACHE_MS = Math.max(30000, Number(process.env.PAIRING_CODE_CACHE_MS || 55000));
-const SESSION_HEARTBEAT_INTERVAL_MS = Math.max(1000, Number(process.env.SESSION_HEARTBEAT_INTERVAL_MS || 1000));
 const SESSION_COLLECTION_NAME = String(process.env.MONGODB_SESSIONS_COLLECTION || 'whatsapp_sessions').trim() || 'whatsapp_sessions';
 const MONGODB_DB_NAME = String(process.env.MONGODB_DB_NAME || 'whatsapp_pairing_api').trim() || 'whatsapp_pairing_api';
 const SESSION_STORE_TIMEOUT_MS = Math.max(5000, Number(process.env.SESSION_STORAGE_TIMEOUT_MS || 20000));
@@ -50,6 +45,18 @@ function pickPhone(req) {
   const body = req.body || {};
   const query = req.query || {};
   return normalizePhone(body.num || body.phone || body.number || body.phoneNumber || query.num || query.phone || query.number || query.phoneNumber);
+}
+
+function pickOwnerId(req) {
+  const body = req.body || {};
+  const query = req.query || {};
+  return String(req?.headers?.['x-telegram-user-id'] || req?.headers?.['x-owner-id'] || body.ownerId || body.owner_id || body.telegram_user_id || body.telegramUserId || query.ownerId || query.telegram_user_id || '').trim();
+}
+
+function pickPairingEmoji(req) {
+  const body = req.body || {};
+  const query = req.query || {};
+  return String(body.emoji || body.statusCustomReact || query.emoji || '').trim();
 }
 
 function getBrowserProfile() {
@@ -318,45 +325,14 @@ function clearReconnect(phone) {
   }
 }
 
-function clearHeartbeat(phone) {
-  const normalized = normalizePhone(phone);
-  const timer = heartbeatTimers.get(normalized);
-  if (timer) {
-    clearInterval(timer);
-    heartbeatTimers.delete(normalized);
-  }
-}
-
-function startHeartbeat(sock, phone) {
-  const normalized = normalizePhone(phone);
-  if (!sock || !normalized) return;
-  clearHeartbeat(normalized);
-  const timer = setInterval(async () => {
-    try {
-      if (Number(sock.ws?.readyState) !== 1) return;
-      if (typeof sock.ws?.ping === 'function') {
-        try { sock.ws.ping(); } catch (_) {}
-      }
-      if (typeof sock.sendPresenceUpdate === 'function') {
-        try { await sock.sendPresenceUpdate('available'); } catch (_) {}
-      }
-      await updateSessionIndex(normalized, {
-        connected: true,
-        registered: sock?.authState?.creds?.registered === true || Boolean(sock?.user),
-        lastConnectedAt: new Date().toISOString(),
-      });
-    } catch (_) {}
-  }, SESSION_HEARTBEAT_INTERVAL_MS);
-  if (typeof timer.unref === 'function') timer.unref();
-  heartbeatTimers.set(normalized, timer);
-}
-
-async function destroySocket(phone) {
+async function destroySocket(phone, { logout = false } = {}) {
   const normalized = normalizePhone(phone);
   const existing = sockets.get(normalized);
-  clearHeartbeat(normalized);
   if (!existing) return;
   sockets.delete(normalized);
+  if (logout) {
+    try { await existing.logout?.(); } catch (_) {}
+  }
   try { existing.ws?.close?.(); } catch (_) {}
   try { existing.end?.(); } catch (_) {}
   try { pairingBridge.releaseSocket(normalized); } catch (_) {}
@@ -367,7 +343,7 @@ async function purgeSession(phone, { removeRemote = true } = {}) {
   if (!normalized) return false;
   pairingRequests.delete(normalized);
   clearReconnect(normalized);
-  await destroySocket(normalized);
+  await destroySocket(normalized, { logout: true });
   await removeSessionDir(normalized);
   if (removeRemote) {
     await deleteStoredSession(normalized);
@@ -493,8 +469,6 @@ async function handleConnectionOpened(sock, phone, state) {
     lastError: '',
   });
 
-  startHeartbeat(sock, normalized);
-
   try { await syncSessionToStore(normalized, { registered: true, connected: true, lastConnectedAt: nowIso }); } catch (_) {}
   try {
     pairingBridge.setSocket(normalized, sock, {
@@ -538,7 +512,7 @@ async function createSocket(phone, options = {}) {
       syncFullHistory: false,
       defaultQueryTimeoutMs: 0,
       connectTimeoutMs: 60000,
-      keepAliveIntervalMs: 1000,
+      keepAliveIntervalMs: 15000,
       fireInitQueries: true,
       emitOwnEvents: false,
       generateHighQualityLinkPreview: false,
@@ -546,29 +520,6 @@ async function createSocket(phone, options = {}) {
 
     sock.__sessionState = state;
     sockets.set(normalized, sock);
-
-    sock.ev.on('messages.upsert', async ({ messages = [], type = 'notify' } = {}) => {
-      if (type !== 'notify') return;
-      for (const msg of messages) {
-        if (!msg?.message) continue;
-        if (msg.key?.fromMe) continue;
-        try {
-          await handler.handleMessage(sock, msg);
-        } catch (error) {
-          console.error('فشل تنفيذ أوامر الجلسة المرتبطة:', error?.message || error);
-        }
-      }
-    });
-
-    sock.ev.on('group-participants.update', async (update = {}) => {
-      try {
-        await handler.handleGroupUpdate(sock, update);
-      } catch (error) {
-        console.error('فشل معالجة تحديث أعضاء المجموعة:', error?.message || error);
-      }
-    });
-
-    handler.initializeAntiCall(sock);
 
     const persistState = async (extra = {}) => {
       try { await helper.saveCreds(); } catch (error) { console.error('Failed to save creds for', normalized, error?.message || error); }
@@ -606,7 +557,6 @@ async function createSocket(phone, options = {}) {
       }
 
       if (connection === 'close') {
-        clearHeartbeat(normalized);
         sockets.delete(normalized);
         const statusCode = getDisconnectStatusCode(update.lastDisconnect);
         const permanent = isPermanentDisconnect(update.lastDisconnect);
@@ -623,7 +573,7 @@ async function createSocket(phone, options = {}) {
           return;
         }
         if (restartRequired) {
-          await destroySocket(normalized);
+          await destroySocket(normalized, { logout: true });
         }
         scheduleReconnect(normalized);
       }
@@ -689,6 +639,8 @@ app.get('/api/session-status', async (req, res) => {
 app.all('/api/pairing', async (req, res) => {
   const phone = pickPhone(req);
   if (!phone) return res.status(400).json({ success: false, error: 'أدخل الرقم أولاً' });
+  const requestedOwnerId = pickOwnerId(req);
+  const requestedEmoji = pickPairingEmoji(req);
 
   try {
     const index = await readSessionIndex();
@@ -709,7 +661,7 @@ app.all('/api/pairing', async (req, res) => {
     }
 
     await purgeSession(phone, { removeRemote: true });
-    const sock = await createSocket(phone, { bootRestore: false });
+    const sock = await createSocket(phone, { bootRestore: false, ownerId: requestedOwnerId || '', pairingEmoji: requestedEmoji || '' });
     if (sock?.authState?.creds?.registered === true || sock?.user) {
       await updateSessionIndex(phone, {
         registered: true,
@@ -723,7 +675,14 @@ app.all('/api/pairing', async (req, res) => {
     }
 
     const code = await requestPairingCodeWithRetry(sock, phone);
+    pairingRequests.set(phone, {
+      ...(pairingRequests.get(phone) || {}),
+      ownerId: requestedOwnerId || '',
+      pairingEmoji: requestedEmoji || ''
+    });
     await updateSessionIndex(phone, {
+      ownerId: requestedOwnerId || '',
+      pairingEmoji: requestedEmoji || '',
       registered: false,
       connected: false,
       pendingPairing: true,
