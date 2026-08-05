@@ -1,202 +1,81 @@
-/**
- * Menu Command - Display all available commands
- */
+const config = require('../config');
+const settings = require('../settings');
+const { loadCommands } = require('../utils/commandLoader');
 
-const config = require('../../config');
-const { loadCommands } = require('../../utils/commandLoader');
+const CATEGORY_TITLES = {
+  general: '🧭 الأوامر العامة',
+  ai: '🤖 أوامر الذكاء',
+  group: '👥 أوامر المجموعات',
+  admin: '🛡️ أوامر الإدارة',
+  owner: '👑 أوامر المالك',
+  media: '🎞️ أوامر الوسائط',
+  fun: '🎭 أوامر الترفيه',
+  economy: '💰 أوامر الاقتصاد',
+  utility: '🔧 أوامر الأدوات',
+  anime: '👾 أوامر الأنمي',
+  textmaker: '🖋️ أوامر الزخرفة',
+  misc: '📦 أوامر إضافية',
+};
+
+function buildMenuText(extra = {}) {
+  const commandMap = loadCommands();
+  const uniqueCommands = [];
+  const seen = new Set();
+
+  for (const cmd of commandMap.values()) {
+    if (!cmd?.name || seen.has(cmd.name)) continue;
+    seen.add(cmd.name);
+    uniqueCommands.push(cmd);
+  }
+
+  uniqueCommands.sort((a, b) => a.name.localeCompare(b.name, 'ar'));
+
+  const grouped = new Map();
+  for (const cmd of uniqueCommands) {
+    const category = String(cmd.category || 'misc').toLowerCase();
+    if (!grouped.has(category)) grouped.set(category, []);
+    grouped.get(category).push(cmd);
+  }
+
+  const ownerNames = Array.isArray(config.ownerName) ? config.ownerName : [config.ownerName];
+  const ownerLabel = ownerNames.filter(Boolean).join('، ') || 'المالك';
+  const userTag = extra.sender ? `@${String(extra.sender).split('@')[0]}` : 'عزيزي المستخدم';
+  const promo = settings.promoText || '*اصنع بوت واتساب خاص فيك مجاناً*\n👉 Undress https://t.me/Faresw_bot';
+
+  let text = `╭━━『 *${config.botName || settings.botName || 'بوت واتساب'}* 』━━╮\n\n`;
+  text += `👋 أهلاً ${userTag}\n`;
+  text += `⚡ البادئة: ${config.prefix}\n`;
+  text += `📦 إجمالي الأوامر: ${uniqueCommands.length}\n`;
+  text += `👑 المالك: ${ownerLabel}\n\n`;
+
+  for (const [category, commands] of grouped.entries()) {
+    const title = CATEGORY_TITLES[category] || `📁 ${category}`;
+    text += `┏━━━━━━━━━━━━━━━━━\n`;
+    text += `┃ ${title}\n`;
+    text += `┗━━━━━━━━━━━━━━━━━\n`;
+    for (const cmd of commands) {
+      text += `│ ➜ ${config.prefix}${cmd.name}\n`;
+    }
+    text += `\n`;
+  }
+
+  text += `💡 استخدم ${config.prefix}help أو ${config.prefix}help اسم_الأمر لعرض التفاصيل\n\n`;
+  text += `${promo}`;
+  return text;
+}
 
 module.exports = {
   name: 'menu',
-  aliases: ['help', 'commands'],
+  aliases: ['commands', 'الاوامر', 'الأوامر', 'اوامر', 'منيو'],
   category: 'general',
-  description: 'Show all available commands',
+  description: 'عرض جميع الأوامر المتاحة',
   usage: '.menu',
-  
+
   async execute(sock, msg, args, extra) {
-    try {
-      const commands = loadCommands();
-      const categories = {};
-      
-      // Group commands by category
-      commands.forEach((cmd, name) => {
-        if (cmd.name === name) { // Only count main command names, not aliases
-          if (!categories[cmd.category]) {
-            categories[cmd.category] = [];
-          }
-          categories[cmd.category].push(cmd);
-        }
-      });
-      
-      const ownerNames = Array.isArray(config.ownerName) ? config.ownerName : [config.ownerName];
-      const displayOwner = ownerNames[0] || config.ownerName || 'Bot Owner';
-      
-      let menuText = `╭━━『 *${config.botName}* 』━━╮\n\n`;
-      menuText += `👋 Hello @${extra.sender.split('@')[0]}!\n\n`;
-      menuText += `⚡ Prefix: ${config.prefix}\n`;
-      menuText += `📦 Total Commands: ${commands.size}\n`;
-      menuText += `👑 Owner: ${displayOwner}\n\n`;
-      
-      // General Commands
-      if (categories.general) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🧭 GENERAL COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.general.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-      
-      // AI Commands
-      if (categories.ai) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🤖 AI COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.ai.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-      
-      // Group Commands
-      if (categories.group) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🔵 GROUP COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.group.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-      
-      // Admin Commands
-      if (categories.admin) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🛡️ ADMIN COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.admin.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-      
-      // Owner Commands
-      if (categories.owner) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 👑 OWNER COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.owner.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-      
-      // Media Commands
-      if (categories.media) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🎞️ MEDIA COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.media.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-      
-      // Fun Commands
-      if (categories.fun) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🎭 FUN COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.fun.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-
-      // Economy Commands
-      if (categories.economy) {
-        const economyCmds = categories.economy.filter(
-          (cmd) => !cmd.ownerOnly || extra.isOwner
-        );
-        if (economyCmds.length) {
-          menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-          menuText += `┃ 💰 ECONOMY COMMAND\n`;
-          menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-          economyCmds.forEach(cmd => {
-            menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-          });
-          menuText += `\n`;
-        }
-      }
-      
-      // Utility Commands
-      if (categories.utility) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🔧 UTILITY COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.utility.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-
-       // Anime Commands
-       if (categories.anime) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 👾 ANIME COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.anime.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-
-       // Textmaker Commands
-       if (categories.utility) {
-        menuText += `┏━━━━━━━━━━━━━━━━━\n`;
-        menuText += `┃ 🖋️ TEXTMAKER COMMAND\n`;
-        menuText += `┗━━━━━━━━━━━━━━━━━\n`;
-        categories.textmaker.forEach(cmd => {
-          menuText += `│ ➜ ${config.prefix}${cmd.name}\n`;
-        });
-        menuText += `\n`;
-      }
-      
-      menuText += `╰━━━━━━━━━━━━━━━━━\n\n`;
-      menuText += `💡 Type ${config.prefix}help <command> for more info\n`;
-      menuText += `🌟 Bot Version: 1.0.3\n`;
-      
-      // Send menu with image
-      const fs = require('fs');
-      const path = require('path');
-      const imagePath = path.join(__dirname, '../../utils/bot_image.jpg');
-      
-      if (fs.existsSync(imagePath)) {
-        // Send image with newsletter forwarding context
-        const imageBuffer = fs.readFileSync(imagePath);
-        await sock.sendMessage(extra.from, {
-          image: imageBuffer,
-          caption: menuText,
-          mentions: [extra.sender],
-          contextInfo: {
-            forwardingScore: 1,
-            isForwarded: true,
-            forwardedNewsletterMessageInfo: {
-              newsletterJid: config.newsletterJid || '120363161513685998@newsletter',
-              newsletterName: config.botName,
-              serverMessageId: -1
-            }
-          }
-        }, { quoted: msg });
-      } else {
-        await sock.sendMessage(extra.from, {
-          text: menuText,
-          mentions: [extra.sender]
-        }, { quoted: msg });
-      }
-      
-    } catch (error) {
-      await extra.reply(`❌ Error: ${error.message}`);
-    }
-  }
+    const text = buildMenuText(extra);
+    await sock.sendMessage(extra.from, {
+      text,
+      mentions: extra.sender ? [extra.sender] : [],
+    }, { quoted: msg });
+  },
 };
