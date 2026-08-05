@@ -1,23 +1,29 @@
-const fetch = require('node-fetch');
+/**
+ * Truth - Get a random truth question from @bochilteam/scraper (translated to English)
+ */
 
-async function truthCommand(sock, chatId, message) {
-    try {
-        const shizokeys = 'shizo';
-        const res = await fetch(`https://shizoapi.onrender.com/api/texts/truth?apikey=${shizokeys}`);
-        
-        if (!res.ok) {
-            throw await res.text();
-        }
-        
-        const json = await res.json();
-        const truthMessage = json.result;
+const { truth } = require('@bochilteam/scraper');
+const { translate } = require('@vitalets/google-translate-api');
 
-        // Send the truth message
-        await sock.sendMessage(chatId, { text: truthMessage }, { quoted: message });
-    } catch (error) {
-        console.error('Error in truth command:', error);
-        await sock.sendMessage(chatId, { text: '❌ Failed to get truth. Please try again later!' }, { quoted: message });
+module.exports = {
+    name: 'truth',
+    aliases: [],
+    category: 'fun',
+    desc: 'Get a random truth question',
+    usage: 'truth',
+    execute: async (sock, msg, args, extra) => {
+      try {
+        const question = await truth();
+        
+        // Translate to English
+        const res = await translate(question, { to: 'en' });
+        
+        await extra.reply(res.text);
+        
+      } catch (error) {
+        console.error('Truth Error:', error);
+        await extra.reply(`❌ Error: ${error.message}`);
+      }
     }
-}
-
-module.exports = { truthCommand };
+  };
+  

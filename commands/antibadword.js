@@ -1,23 +1,79 @@
-const { handleAntiBadwordCommand } = require('../lib/antibadword');
-const isAdminHelper = require('../lib/isAdmin');
+/**
+ * Antibadword Command - Detect and delete bad words (delete/kick/warn)
+ */
 
-async function antibadwordCommand(sock, chatId, message, senderId, isSenderAdmin) {
+const database = require('../../database');
+
+module.exports = {
+  name: 'antibadword',
+  aliases: ['antibad', 'nobadword'],
+  category: 'admin',
+  description: 'Configure antibadword protection (delete/kick/warn)',
+  usage: '.antibadword <on/off/set/get>',
+  groupOnly: true,
+  adminOnly: true,
+  botAdminNeeded: true,
+
+  async execute(sock, msg, args, extra) {
     try {
-        if (!isSenderAdmin) {
-            await sock.sendMessage(chatId, { text: '```For Group Admins Only!```' }, { quoted: message });
-            return;
+      if (!args[0]) {
+        const settings = database.getGroupSettings(extra.from);
+        const status = settings.antibadword ? 'ON' : 'OFF';
+        const action = settings.antibadwordAction || 'delete';
+        return extra.reply(
+          `🚫 *Antibadword Status*\n\n` +
+          `Status: *${status}*\n` +
+          `Action: *${action}*\n\n` +
+          `Usage:\n` +
+          `  .antibadword on\n` +
+          `  .antibadword off\n` +
+          `  .antibadword set delete | kick | warn\n` +
+          `  .antibadword get`
+        );
+      }
+
+      const opt = args[0].toLowerCase();
+
+      if (opt === 'on') {
+        if (database.getGroupSettings(extra.from).antibadword) {
+          return extra.reply('*Antibadword is already on*');
+        }
+        database.updateGroupSettings(extra.from, { antibadword: true });
+        return extra.reply('*Antibadword has been turned ON*');
+      }
+
+      if (opt === 'off') {
+        database.updateGroupSettings(extra.from, { antibadword: false });
+        return extra.reply('*Antibadword has been turned OFF*');
+      }
+
+      if (opt === 'set') {
+        if (args.length < 2) {
+          return extra.reply('*Please specify an action: .antibadword set delete | kick | warn*');
         }
 
-        // Extract match from message
-        const text = message.message?.conversation || 
-                    message.message?.extendedTextMessage?.text || '';
-        const match = text.split(' ').slice(1).join(' ');
+        const setAction = args[1].toLowerCase();
+        if (!['delete', 'kick', 'warn'].includes(setAction)) {
+          return extra.reply('*Invalid action. Choose delete, kick, or warn.*');
+        }
 
-        await handleAntiBadwordCommand(sock, chatId, message, match);
+        database.updateGroupSettings(extra.from, {
+          antibadwordAction: setAction,
+          antibadword: true,
+        });
+        return extra.reply(`*Antibadword action set to ${setAction}*`);
+      }
+
+      if (opt === 'get') {
+        const settings = database.getGroupSettings(extra.from);
+        const status = settings.antibadword ? 'ON' : 'OFF';
+        const action = settings.antibadwordAction || 'delete';
+        return extra.reply(`*Antibadword Configuration:*\nStatus: ${status}\nAction: ${action}`);
+      }
+
+      return extra.reply('*Use .antibadword for usage.*');
     } catch (error) {
-        console.error('Error in antibadword command:', error);
-        await sock.sendMessage(chatId, { text: '*Error processing antibadword command*' }, { quoted: message });
+      await extra.reply(`❌ Error: ${error.message}`);
     }
-}
-
-module.exports = antibadwordCommand; 
+  },
+};

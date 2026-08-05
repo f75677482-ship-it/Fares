@@ -1,174 +1,173 @@
+/**
+ * Facebook Downloader - Download Facebook videos
+ */
+
+const { facebookdl } = require('@bochilteam/scraper-facebook');
 const axios = require('axios');
-const fs = require('fs');
-const path = require('path');
+const config = require('../../config');
 
-function getMessageText(message) {
-  return (
-    message.message?.conversation ||
-    message.message?.extendedTextMessage?.text ||
-    message.message?.imageMessage?.caption ||
-    message.message?.videoMessage?.caption ||
-    ''
-  ).trim();
-}
+// Store processed message IDs to prevent duplicates
+const processedMessages = new Set();
 
-function extractUrl(text = '') {
-  return String(text).match(/https?:\/\/\S+/i)?.[0] || '';
-}
-
-function isFacebookUrl(url = '') {
-  return /https?:\/\/(?:www\.)?(?:facebook\.com|fb\.watch|m\.facebook\.com)\//i.test(url);
-}
-
-function firstNonEmpty(...values) {
-  for (const value of values) {
-    if (typeof value === 'string' && value.trim()) return value.trim();
-  }
-  return '';
-}
-
-function extractFacebookResult(data) {
-  if (!data || typeof data !== 'object') return null;
-  const roots = [data, data.result, data.data].filter(Boolean);
-
-  for (const root of roots) {
-    const fbvid = firstNonEmpty(
-      root?.media?.video_hd,
-      root?.media?.video_sd,
-      root?.video_hd,
-      root?.video_sd,
-      root?.url,
-      root?.download,
-      root?.video,
-      Array.isArray(root) ? root.find(item => item?.quality === 'HD')?.url : '',
-      Array.isArray(root) ? root.find(item => item?.quality === 'SD')?.url : '',
-      Array.isArray(root) ? root[0]?.url : ''
-    );
-
-    if (fbvid) {
-      return {
-        videoUrl: fbvid,
-        title: firstNonEmpty(root?.info?.title, root?.title, root?.caption, 'Facebook Video')
-      };
-    }
-  }
-
-  return null;
-}
-
-async function facebookCommand(sock, chatId, message) {
-  try {
-    const text = getMessageText(message);
-    const url = extractUrl(text);
-
-    if (!url) {
-      return await sock.sendMessage(chatId, {
-        text: 'أرسل رابط فيديو فيسبوك صحيح، مثال:\n.fb https://www.facebook.com/...'
-      }, { quoted: message });
-    }
-
-    if (!isFacebookUrl(url)) {
-      return await sock.sendMessage(chatId, {
-        text: '❌ هذا ليس رابط فيسبوك صحيح.'
-      }, { quoted: message });
-    }
-
-    await sock.sendMessage(chatId, {
-      react: { text: '🔄', key: message.key }
-    });
-
-    let resolvedUrl = url;
+module.exports = {
+  name: 'facebook',
+  aliases: ['fb', 'fbdl', 'facebookdl'],
+  category: 'media',
+  description: 'Download Facebook videos',
+  usage: '.facebook <Facebook URL>',
+  
+  async execute(sock, msg, args, extra) {
     try {
-      const res = await axios.get(url, {
-        timeout: 20000,
-        maxRedirects: 10,
-        headers: { 'User-Agent': 'Mozilla/5.0' }
-      });
-      const possible = res?.request?.res?.responseUrl;
-      if (possible && typeof possible === 'string') resolvedUrl = possible;
-    } catch (_) {}
-
-    const endpoints = [
-      `https://api.hanggts.xyz/download/facebook?url=${encodeURIComponent(resolvedUrl)}`,
-      `https://api.hanggts.xyz/download/facebook?url=${encodeURIComponent(url)}`
-    ];
-
-    let result = null;
-    for (const endpoint of endpoints) {
-      try {
-        const response = await axios.get(endpoint, {
-          timeout: 20000,
-          headers: {
-            accept: '*/*',
-            'User-Agent': 'Mozilla/5.0'
-          },
-          maxRedirects: 5,
-          validateStatus: status => status >= 200 && status < 500
-        });
-        result = extractFacebookResult(response.data);
-        if (result?.videoUrl) break;
-      } catch (error) {
-        console.error('Facebook API failed:', error.message);
+      // Check if message has already been processed
+      if (processedMessages.has(msg.key.id)) {
+        return;
       }
-    }
-
-    if (!result?.videoUrl) {
-      return await sock.sendMessage(chatId, {
-        text: '❌ تعذر الحصول على رابط الفيديو من فيسبوك. قد يكون الفيديو خاصاً أو الرابط غير صالح.'
-      }, { quoted: message });
-    }
-
-    const caption = result.title ? `✅ تم تنزيل فيديو فيسبوك\n\n📝 ${result.title}` : '✅ تم تنزيل فيديو فيسبوك';
-
-    try {
-      await sock.sendMessage(chatId, {
-        video: { url: result.videoUrl },
-        mimetype: 'video/mp4',
-        caption
-      }, { quoted: message });
-      return;
-    } catch (urlError) {
-      console.error('Facebook URL send failed:', urlError.message);
-    }
-
-    const tmpDir = path.join(process.cwd(), 'tmp');
-    if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-    const tempFile = path.join(tmpDir, `fb_${Date.now()}.mp4`);
-
-    try {
-      const videoResponse = await axios({
-        method: 'GET',
-        url: result.videoUrl,
-        responseType: 'stream',
-        timeout: 60000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0',
-          Accept: 'video/mp4,video/*;q=0.9,*/*;q=0.8',
-          Referer: 'https://www.facebook.com/'
+      
+      // Add message ID to processed set
+      processedMessages.add(msg.key.id);
+      
+      // Clean up old message IDs after 5 minutes
+      setTimeout(() => {
+        processedMessages.delete(msg.key.id);
+      }, 5 * 60 * 1000);
+      
+      const text = msg.message?.conversation || 
+                   msg.message?.extendedTextMessage?.text ||
+                   args.join(' ');
+      
+      if (!text) {
+        return await extra.reply('Please provide a Facebook link for the video.');
+      }
+      
+      // Extract URL from command
+      const url = text.split(' ').slice(1).join(' ').trim();
+      
+      if (!url) {
+        return await extra.reply('Please provide a Facebook link for the video.');
+      }
+      
+      // Check for various Facebook URL formats
+      const facebookPatterns = [
+        /https?:\/\/(?:www\.|m\.)?facebook\.com\//,
+        /https?:\/\/(?:www\.|m\.)?fb\.com\//,
+        /https?:\/\/fb\.watch\//,
+        /https?:\/\/(?:www\.)?facebook\.com\/watch/,
+        /https?:\/\/(?:www\.)?facebook\.com\/.*\/videos\//
+      ];
+      
+      const isValidUrl = facebookPatterns.some(pattern => pattern.test(url));
+      
+      if (!isValidUrl) {
+        return await extra.reply('That is not a valid Facebook link. Please provide a valid Facebook video link.');
+      }
+      
+      await sock.sendMessage(extra.from, {
+        react: { text: '🔄', key: msg.key }
+      });
+      
+      try {
+        // Use @bochilteam/scraper-facebook
+        const data = await facebookdl(url);
+        
+        if (!data || !data.video || !Array.isArray(data.video) || data.video.length === 0) {
+          throw new Error('No video data found');
         }
-      });
-
-      const writer = fs.createWriteStream(tempFile);
-      videoResponse.data.pipe(writer);
-      await new Promise((resolve, reject) => {
-        writer.on('finish', resolve);
-        writer.on('error', reject);
-      });
-
-      await sock.sendMessage(chatId, {
-        video: { url: tempFile },
-        mimetype: 'video/mp4',
-        caption
-      }, { quoted: message });
-    } finally {
-      try { if (fs.existsSync(tempFile)) fs.unlinkSync(tempFile); } catch (_) {}
+        
+        // Get the highest quality video (first in array is usually highest)
+        const videoOption = data.video[0];
+        if (!videoOption || !videoOption.download) {
+          throw new Error('No video download function found');
+        }
+        
+        // Call the download function to get the video URL or buffer
+        const videoData = await videoOption.download();
+        
+        let videoUrl = null;
+        let videoBuffer = null;
+        
+        // Check if it's a URL or buffer
+        if (typeof videoData === 'string') {
+          videoUrl = videoData;
+        } else if (Buffer.isBuffer(videoData)) {
+          videoBuffer = videoData;
+        } else if (videoData && videoData.url) {
+          videoUrl = videoData.url;
+        } else if (videoData && videoData.data) {
+          videoBuffer = Buffer.from(videoData.data);
+        } else {
+          throw new Error('Invalid video data format');
+        }
+        
+        // Build caption with video info
+        const botName = config.botName.toUpperCase();
+        let caption = `*DOWNLOADED BY ${botName}*`;
+        
+        const parts = [];
+        
+        if (data.duration) {
+          parts.push(`⏱️ Duration: ${data.duration}`);
+        }
+        
+        if (videoOption.quality) {
+          parts.push(`📹 Quality: ${videoOption.quality}`);
+        }
+        
+        if (parts.length > 0) {
+          caption += '\n\n' + parts.join('\n');
+        }
+        
+        // Send video
+        if (videoBuffer) {
+          // Send as buffer
+          await sock.sendMessage(extra.from, {
+            video: videoBuffer,
+            mimetype: 'video/mp4',
+            caption: caption
+          }, { quoted: msg });
+        } else if (videoUrl) {
+          // Try URL first
+          try {
+            await sock.sendMessage(extra.from, {
+              video: { url: videoUrl },
+              mimetype: 'video/mp4',
+              caption: caption
+            }, { quoted: msg });
+          } catch (urlError) {
+            // If URL fails, download and send as buffer
+            console.error('URL send failed, trying buffer method:', urlError.message);
+            try {
+              const videoResponse = await axios.get(videoUrl, {
+                responseType: 'arraybuffer',
+                timeout: 60000,
+                maxContentLength: 100 * 1024 * 1024,
+                headers: {
+                  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                  'Referer': 'https://www.facebook.com/'
+                }
+              });
+              
+              const buffer = Buffer.from(videoResponse.data);
+              await sock.sendMessage(extra.from, {
+                video: buffer,
+                mimetype: 'video/mp4',
+                caption: caption
+              }, { quoted: msg });
+            } catch (bufferError) {
+              console.error('Buffer method also failed:', bufferError.message);
+              throw new Error('Failed to send video');
+            }
+          }
+        } else {
+          throw new Error('No video URL or buffer found');
+        }
+        
+      } catch (error) {
+        console.error('Error in Facebook download:', error);
+        await extra.reply(`❌ Failed to download Facebook video.\n\nError: ${error.message}\n\nPlease try again with a different link.`);
+      }
+    } catch (error) {
+      console.error('Error in Facebook command:', error);
+      await extra.reply('An error occurred while processing the request. Please try again later.');
     }
-  } catch (error) {
-    console.error('Error in Facebook command:', error);
-    await sock.sendMessage(chatId, {
-      text: '❌ حدث خطأ أثناء تنزيل فيديو فيسبوك. حاول مرة أخرى.'
-    }, { quoted: message });
   }
-}
-
-module.exports = facebookCommand;
+};

@@ -1,34 +1,30 @@
-const fetch = require('node-fetch');
+/**
+ * Meme Command - Send random memes
+ */
 
-async function memeCommand(sock, chatId, message) {
+const APIs = require('../../utils/api');
+const axios = require('axios');
+
+module.exports = {
+  name: 'meme',
+  aliases: ['memes'],
+  category: 'fun',
+  description: 'Get random memes',
+  usage: '.meme',
+  
+  async execute(sock, msg, args, extra) {
     try {
-        const response = await fetch('https://shizoapi.onrender.com/api/memes/cheems?apikey=shizo');
-        
-        // Check if response is an image
-        const contentType = response.headers.get('content-type');
-        if (contentType && contentType.includes('image')) {
-            const imageBuffer = await response.buffer();
-            
-            const buttons = [
-                { buttonId: '.meme', buttonText: { displayText: '🎭 Another Meme' }, type: 1 },
-                { buttonId: '.joke', buttonText: { displayText: '😄 Joke' }, type: 1 }
-            ];
-
-            await sock.sendMessage(chatId, { 
-                image: imageBuffer,
-                caption: "> Here's your cheems meme! 🐕",
-                buttons: buttons,
-                headerType: 1
-            },{ quoted: message});
-        } else {
-            throw new Error('Invalid response type from API');
-        }
+      const meme = await APIs.getMeme();
+      
+      const imageBuffer = await axios.get(meme.url, { responseType: 'arraybuffer' });
+      
+      await sock.sendMessage(extra.from, {
+        image: Buffer.from(imageBuffer.data),
+        caption: `😂 *${meme.title}*\n\n📱 From: r/${meme.subreddit}\n👤 By: ${meme.author}\n⬆️ Upvotes: ${meme.ups}`
+      }, { quoted: msg });
+      
     } catch (error) {
-        console.error('Error in meme command:', error);
-        await sock.sendMessage(chatId, { 
-            text: '❌ Failed to fetch meme. Please try again later.'
-        },{ quoted: message });
+      await extra.reply(`❌ Error: ${error.message}`);
     }
-}
-
-module.exports = memeCommand;
+  }
+};

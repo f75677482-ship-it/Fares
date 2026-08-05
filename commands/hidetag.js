@@ -1,59 +1,109 @@
-const isAdmin = require('../lib/isAdmin');
-const { downloadContentFromMessage } = require('@whiskeysockets/baileys');
-const fs = require('fs');
-const path = require('path');
+/**
+ * HideTag Command
+ * Silently tag all group members without listing them
+ * Supports text, images, videos, and stickers
+ */
 
-async function downloadMediaMessage(message, mediaType) {
-    const stream = await downloadContentFromMessage(message, mediaType);
-    let buffer = Buffer.from([]);
-    for await (const chunk of stream) {
-        buffer = Buffer.concat([buffer, chunk]);
-    }
-    const filePath = path.join(__dirname, '../temp/', `${Date.now()}.${mediaType}`);
-    fs.writeFileSync(filePath, buffer);
-    return filePath;
-}
+const { downloadMediaMessage } = require('@whiskeysockets/baileys');
 
-async function hideTagCommand(sock, chatId, senderId, messageText, replyMessage, message) {
-    const { isSenderAdmin, isBotAdmin } = await isAdmin(sock, chatId, senderId);
-
-    if (!isBotAdmin) {
-        await sock.sendMessage(chatId, { text: 'Please make the bot an admin first.' }, { quoted: message });
-        return;
-    }
-
-    if (!isSenderAdmin) {
-        await sock.sendMessage(chatId, { text: 'Only admins can use the .hidetag command.' }, { quoted: message });
-        return;
-    }
-
-    const groupMetadata = await sock.groupMetadata(chatId);
-    const participants = groupMetadata.participants || [];
-    const nonAdmins = participants.filter(p => !p.admin).map(p => p.id);
-
-    if (replyMessage) {
-        let content = {};
-        if (replyMessage.imageMessage) {
-            const filePath = await downloadMediaMessage(replyMessage.imageMessage, 'image');
-            content = { image: { url: filePath }, caption: messageText || replyMessage.imageMessage.caption || '', mentions: nonAdmins };
-        } else if (replyMessage.videoMessage) {
-            const filePath = await downloadMediaMessage(replyMessage.videoMessage, 'video');
-            content = { video: { url: filePath }, caption: messageText || replyMessage.videoMessage.caption || '', mentions: nonAdmins };
-        } else if (replyMessage.conversation || replyMessage.extendedTextMessage) {
-            content = { text: replyMessage.conversation || replyMessage.extendedTextMessage.text, mentions: nonAdmins };
-        } else if (replyMessage.documentMessage) {
-            const filePath = await downloadMediaMessage(replyMessage.documentMessage, 'document');
-            content = { document: { url: filePath }, fileName: replyMessage.documentMessage.fileName, caption: messageText || '', mentions: nonAdmins };
+module.exports = {
+  name: 'hidetag',
+  aliases: ['tag'],
+  description: 'Silently tag all members in the group',
+  usage: '.tag <message> (or reply to media)',
+  category: 'admin',
+  groupOnly: true,
+  adminOnly: true,
+  botAdminNeeded: true,
+  
+  async execute(sock, msg, args, extra) {
+    try {
+      const groupMetadata = await sock.groupMetadata(extra.from);
+      const participants = groupMetadata.participants || [];
+      const mentions = participants.map((p) => p.id || p.lid).filter(Boolean);
+      
+      // Check if message is a reply to media
+      const ctxInfo = msg.message?.extendedTextMessage?.contextInfo;
+      let targetMessage = msg;
+      
+      if (ctxInfo?.quotedMessage) {
+        // Build target message for download
+        targetMessage = {
+          key: {
+            remoteJid: extra.from,
+            id: ctxInfo.stanzaId,
+            participant: ctxInfo.participant,
+          },
+          message: ctxInfo.quotedMessage,
+        };
+      }
+      
+      // Check what type of media we're dealing with
+      const mediaMessage = 
+        targetMessage.message?.imageMessage ||
+        targetMessage.message?.videoMessage ||
+        targetMessage.message?.stickerMessage;
+      
+      if (mediaMessage) {
+        // Download and resend media with mentions
+        try {
+          const mediaBuffer = await downloadMediaMessage(
+            targetMessage,
+            'buffer',
+            {},
+            { logger: undefined, reuploadRequest: sock.updateMediaMessage }
+          );
+          
+          if (targetMessage.message?.imageMessage) {
+            const text = args.join(' ') || targetMessage.message.imageMessage.caption || '';
+            await sock.sendMessage(extra.from, {
+              image: mediaBuffer,
+              caption: text,
+              mentions
+            }, { quoted: msg });
+          } else if (targetMessage.message?.videoMessage) {
+            const text = args.join(' ') || targetMessage.message.videoMessage.caption || '';
+            await sock.sendMessage(extra.from, {
+              video: mediaBuffer,
+              caption: text,
+              mentions
+            }, { quoted: msg });
+          } else if (targetMessage.message?.stickerMessage) {
+            await sock.sendMessage(extra.from, {
+              sticker: mediaBuffer,
+              mentions
+            }, { quoted: msg });
+            
+            // If there's text, send it separately
+            const text = args.join(' ');
+            if (text) {
+              await sock.sendMessage(extra.from, { text, mentions }, { quoted: msg });
+            }
+          }
+        } catch (mediaError) {
+          console.error('Error downloading media for hidetag:', mediaError);
+          // Fallback to text with mentions
+          const text = args.join(' ') || ' ';
+          await sock.sendMessage(extra.from, { text, mentions }, { quoted: msg });
         }
-
-        if (Object.keys(content).length > 0) {
-            await sock.sendMessage(chatId, content);
+      } else {
+        // Check if replying to a message - send exact message content
+        if (ctxInfo?.quotedMessage) {
+          // Get the quoted message text
+          const quotedText = ctxInfo.quotedMessage.conversation || 
+                           ctxInfo.quotedMessage.extendedTextMessage?.text || 
+                           args.join(' ') || ' ';
+          
+          await sock.sendMessage(extra.from, { text: quotedText, mentions }, { quoted: msg });
+        } else {
+          // Plain text message
+          const text = args.join(' ') || ' ';
+          await sock.sendMessage(extra.from, { text, mentions }, { quoted: msg });
         }
-    } else {
-        await sock.sendMessage(chatId, { text: messageText || 'Tagged members (excluding admins).', mentions: nonAdmins });
+      }
+    } catch (error) {
+      console.error('HideTag command error:', error);
+      await extra.reply('❌ Failed to tag members.');
     }
-}
-
-module.exports = hideTagCommand;
-
-
+  },
+};

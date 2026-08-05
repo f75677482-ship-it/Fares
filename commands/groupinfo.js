@@ -1,53 +1,45 @@
-async function groupInfoCommand(sock, chatId, msg) {
-    try {
-        // Get group metadata
-        const groupMetadata = await sock.groupMetadata(chatId);
+/**
+ * Group Info Command - Display group information
+ */
+
+module.exports = {
+    name: 'groupinfo',
+    aliases: ['info', 'ginfo'],
+    category: 'general',
+    description: 'Show group information',
+    usage: '.groupinfo',
+    groupOnly: true,
+    
+    async execute(sock, msg, args, extra) {
+      try {
+        const metadata = extra.groupMetadata;
         
-        // Get group profile picture
-        let pp;
-        try {
-            pp = await sock.profilePictureUrl(chatId, 'image');
-        } catch {
-            pp = 'https://i.imgur.com/2wzGhpF.jpeg'; // Default image
-        }
-
-        // Get admins from participants
-        const participants = groupMetadata.participants;
-        const groupAdmins = participants.filter(p => p.admin);
-        const listAdmin = groupAdmins.map((v, i) => `${i + 1}. @${v.id.split('@')[0]}`).join('\n');
+        const admins = metadata.participants.filter(p => p.admin === 'admin' || p.admin === 'superadmin');
+        const members = metadata.participants.filter(p => !p.admin);
         
-        // Get group owner
-        const owner = groupMetadata.owner || groupAdmins.find(p => p.admin === 'superadmin')?.id || chatId.split('-')[0] + '@s.whatsapp.net';
-
-        // Create info text
-        const text = `
-┌──「 *INFO GROUP* 」
-▢ *♻️ID:*
-   • ${groupMetadata.id}
-▢ *🔖NAME* : 
-• ${groupMetadata.subject}
-▢ *👥Members* :
-• ${participants.length}
-▢ *🤿Group Owner:*
-• @${owner.split('@')[0]}
-▢ *🕵🏻‍♂️Admins:*
-${listAdmin}
-
-▢ *📌Description* :
-   • ${groupMetadata.desc?.toString() || 'No description'}
-`.trim();
-
-        // Send the message with image and mentions
-        await sock.sendMessage(chatId, {
-            image: { url: pp },
-            caption: text,
-            mentions: [...groupAdmins.map(v => v.id), owner]
+        let text = `📋 *GROUP INFORMATION*\n\n`;
+        text += `🏷️ Name: ${metadata.subject}\n`;
+        text += `🆔 ID: ${metadata.id}\n`;
+        text += `👥 Members: ${metadata.participants.length}\n`;
+        text += `👑 Admins: ${admins.length}\n`;
+        text += `📝 Description: ${metadata.desc || 'No description'}\n`;
+        text += `🔒 Restricted: ${metadata.restrict ? 'Yes' : 'No'}\n`;
+        text += `📢 Announce: ${metadata.announce ? 'Yes' : 'No'}\n`;
+        text += `📅 Created: ${new Date(metadata.creation * 1000).toLocaleDateString()}\n\n`;
+        text += `👑 *Admins:*\n`;
+        
+        admins.forEach((admin, index) => {
+          text += `${index + 1}. @${admin.id.split('@')[0]}\n`;
         });
-
-    } catch (error) {
-        console.error('Error in groupinfo command:', error);
-        await sock.sendMessage(chatId, { text: 'Failed to get group info!' });
+        
+        await sock.sendMessage(extra.from, {
+          text,
+          mentions: admins.map(a => a.id)
+        }, { quoted: msg });
+        
+      } catch (error) {
+        await extra.reply(`❌ Error: ${error.message}`);
+      }
     }
-}
-
-module.exports = groupInfoCommand; 
+  };
+  

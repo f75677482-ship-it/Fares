@@ -1,14 +1,26 @@
-const axios = require('axios');
+/**
+ * Joke Command - Send random jokes
+ */
 
-module.exports = async function (sock, chatId) {
+const APIs = require('../../utils/api');
+
+module.exports = {
+  name: 'joke',
+  aliases: ['jokes'],
+  category: 'fun',
+  description: 'Get random joke',
+  usage: '.joke',
+  
+  async execute(sock, msg, args, extra) {
     try {
-        const response = await axios.get('https://icanhazdadjoke.com/', {
-            headers: { Accept: 'application/json' }
-        });
-        const joke = response.data.joke;
-        await sock.sendMessage(chatId, { text: joke });
+      const joke = await APIs.getJoke();
+      
+      let text = `${joke.setup}\n\n${joke.punchline}`;
+      
+      await extra.reply(text);
+      
     } catch (error) {
-        console.error('Error fetching joke:', error);
-        await sock.sendMessage(chatId, { text: 'Sorry, I could not fetch a joke right now.' });
+      await extra.reply(`❌ Error: ${error.message}`);
     }
+  }
 };

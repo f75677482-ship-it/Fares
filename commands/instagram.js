@@ -1,109 +1,148 @@
-const { igdl } = require('ruhend-scraper');
+/**
+ * Instagram Downloader - Using ruhend-scraper
+ */
 
+const { igdl } = require('ruhend-scraper');
+const config = require('../../config');
+
+// Store processed message IDs to prevent duplicates
 const processedMessages = new Set();
 
-function getMessageText(message) {
-  return (
-    message.message?.conversation ||
-    message.message?.extendedTextMessage?.text ||
-    message.message?.imageMessage?.caption ||
-    message.message?.videoMessage?.caption ||
-    ''
-  ).trim();
-}
-
-function extractUrl(text = '') {
-  return String(text).match(/https?:\/\/\S+/i)?.[0] || '';
-}
-
-function isInstagramUrl(url = '') {
-  return /https?:\/\/(?:www\.)?(?:instagram\.com|instagr\.am)\//i.test(url);
-}
-
+// Function to extract unique media URLs with simple deduplication
 function extractUniqueMedia(mediaData) {
   const uniqueMedia = [];
   const seenUrls = new Set();
+  
   for (const media of mediaData) {
-    if (!media?.url) continue;
-    if (seenUrls.has(media.url)) continue;
-    seenUrls.add(media.url);
-    uniqueMedia.push(media);
+    if (!media.url) continue;
+    
+    // Only check for exact URL duplicates
+    if (!seenUrls.has(media.url)) {
+      seenUrls.add(media.url);
+      uniqueMedia.push(media);
+    }
   }
+  
   return uniqueMedia;
 }
 
-async function instagramCommand(sock, chatId, message) {
-  try {
-    if (processedMessages.has(message.key.id)) return;
-    processedMessages.add(message.key.id);
-    setTimeout(() => processedMessages.delete(message.key.id), 5 * 60 * 1000);
-
-    const text = getMessageText(message);
-    const url = extractUrl(text);
-
-    if (!url) {
-      return await sock.sendMessage(chatId, {
-        text: 'أرسل رابط إنستغرام صحيح، مثال:\n.instagram https://www.instagram.com/reel/...'
-      }, { quoted: message });
-    }
-
-    if (!isInstagramUrl(url)) {
-      return await sock.sendMessage(chatId, {
-        text: '❌ هذا ليس رابط إنستغرام صحيح.'
-      }, { quoted: message });
-    }
-
-    await sock.sendMessage(chatId, {
-      react: { text: '🔄', key: message.key }
-    });
-
-    const downloadData = await igdl(url);
-    const mediaData = Array.isArray(downloadData?.data) ? downloadData.data : [];
-    if (!mediaData.length) {
-      return await sock.sendMessage(chatId, {
-        text: '❌ لم يتم العثور على وسائط في الرابط. قد يكون المنشور خاصاً أو الرابط غير صالح.'
-      }, { quoted: message });
-    }
-
-    const mediaToDownload = extractUniqueMedia(mediaData).slice(0, 20);
-    if (!mediaToDownload.length) {
-      return await sock.sendMessage(chatId, {
-        text: '❌ لم أتمكن من استخراج ملفات قابلة للتنزيل من الرابط.'
-      }, { quoted: message });
-    }
-
-    for (let i = 0; i < mediaToDownload.length; i++) {
-      try {
-        const media = mediaToDownload[i];
-        const mediaUrl = media.url;
-        const isVideo = media.type === 'video' || /\.(mp4|mov|avi|mkv|webm)(\?|$)/i.test(mediaUrl) || /\/reel\//i.test(url) || /\/tv\//i.test(url);
-
-        if (isVideo) {
-          await sock.sendMessage(chatId, {
-            video: { url: mediaUrl },
-            mimetype: 'video/mp4',
-            caption: '✅ تم تنزيل المقطع من إنستغرام'
-          }, { quoted: message });
-        } else {
-          await sock.sendMessage(chatId, {
-            image: { url: mediaUrl },
-            caption: '✅ تم تنزيل الصورة من إنستغرام'
-          }, { quoted: message });
-        }
-
-        if (i < mediaToDownload.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 1000));
-        }
-      } catch (mediaError) {
-        console.error(`Error downloading Instagram media ${i + 1}:`, mediaError.message);
-      }
-    }
-  } catch (error) {
-    console.error('Error in Instagram command:', error);
-    await sock.sendMessage(chatId, {
-      text: '❌ حدث خطأ أثناء تنزيل محتوى إنستغرام. حاول مرة أخرى.'
-    }, { quoted: message });
-  }
+// Function to validate media URL
+function isValidMediaUrl(url) {
+  if (!url || typeof url !== 'string') return false;
+  
+  // Accept any URL that looks like media
+  return url.includes('cdninstagram.com') || 
+         url.includes('instagram') || 
+         url.includes('http');
 }
 
-module.exports = instagramCommand;
+module.exports = {
+  name: 'instagram',
+  aliases: ['ig', 'insta', 'igdl', 'reels'],
+  category: 'media',
+  description: 'Download Instagram photos/videos/reels',
+  usage: '<Instagram URL>',
+  
+  async execute(sock, msg, args, extra) {
+    try {
+      const chatId = extra.from;
+      
+      // Check if message has already been processed
+      if (processedMessages.has(msg.key.id)) {
+        return;
+      }
+      
+      // Add message ID to processed set
+      processedMessages.add(msg.key.id);
+      
+      // Clean up old message IDs after 5 minutes
+      setTimeout(() => {
+        processedMessages.delete(msg.key.id);
+      }, 5 * 60 * 1000);
+      
+      const text = msg.message?.conversation || 
+                   msg.message?.extendedTextMessage?.text ||
+                   args.join(' ');
+      
+      if (!text) {
+        return extra.reply('Please provide an Instagram link for the video.');
+      }
+      
+      // Check for various Instagram URL formats
+      const instagramPatterns = [
+        /https?:\/\/(?:www\.)?instagram\.com\//,
+        /https?:\/\/(?:www\.)?instagr\.am\//,
+        /https?:\/\/(?:www\.)?instagram\.com\/p\//,
+        /https?:\/\/(?:www\.)?instagram\.com\/reel\//,
+        /https?:\/\/(?:www\.)?instagram\.com\/tv\//
+      ];
+      
+      const isValidUrl = instagramPatterns.some(pattern => pattern.test(text));
+      
+      if (!isValidUrl) {
+        return extra.reply('That is not a valid Instagram link. Please provide a valid Instagram post, reel, or video link.');
+      }
+      
+      await sock.sendMessage(chatId, {
+        react: { text: '📥', key: msg.key }
+      });
+      
+      const downloadData = await igdl(text);
+      
+      if (!downloadData || !downloadData.data || downloadData.data.length === 0) {
+        return extra.reply('❌ No media found at the provided link. The post might be private or the link is invalid.');
+      }
+      
+      const mediaData = downloadData.data;
+      
+      // Simple deduplication - just remove exact URL duplicates
+      const uniqueMedia = extractUniqueMedia(mediaData);
+      
+      // Limit to maximum 20 unique media items
+      const mediaToDownload = uniqueMedia.slice(0, 20);
+      
+      if (mediaToDownload.length === 0) {
+        return extra.reply('❌ No valid media found to download. This might be a private post or the scraper failed.');
+      }
+      
+      // Download all media silently without status messages
+      for (let i = 0; i < mediaToDownload.length; i++) {
+        try {
+          const media = mediaToDownload[i];
+          const mediaUrl = media.url;
+          
+          // Check if URL ends with common video extensions
+          const isVideo = /\.(mp4|mov|avi|mkv|webm)$/i.test(mediaUrl) || 
+                        media.type === 'video' || 
+                        text.includes('/reel/') || 
+                        text.includes('/tv/');
+          
+          if (isVideo) {
+            await sock.sendMessage(chatId, {
+              video: { url: mediaUrl },
+              mimetype: 'video/mp4',
+              caption: `*DOWNLOADED BY ${config.botName.toUpperCase()}*`
+            }, { quoted: msg });
+          } else {
+            await sock.sendMessage(chatId, {
+              image: { url: mediaUrl },
+              caption: `*DOWNLOADED BY ${config.botName.toUpperCase()}*`
+            }, { quoted: msg });
+          }
+          
+          // Add small delay between downloads to prevent rate limiting
+          if (i < mediaToDownload.length - 1) {
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          
+        } catch (mediaError) {
+          console.error(`Error downloading media ${i + 1}:`, mediaError);
+          // Continue with next media if one fails
+        }
+      }
+    } catch (error) {
+      console.error('Error in Instagram command:', error);
+      await extra.reply('❌ An error occurred while processing the Instagram request. Please try again.');
+    }
+  }
+};

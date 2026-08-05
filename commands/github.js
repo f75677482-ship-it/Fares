@@ -1,124 +1,90 @@
-const moment = require('moment-timezone');
-const fetch = require('node-fetch');
-const fs = require('fs');
-const path = require('path');
-const settings = require('../settings');
+/**
+ * GitHub Command - Show bot GitHub repository and stats
+ */
 
-const DEFAULT_PROJECT_URL = 'https://t.me/Faresw_bot';
+const axios = require('axios');
+const config = require('../../config');
 
-function getConfiguredProjectUrl() {
-  return String(global.repoUrl || settings.repoUrl || DEFAULT_PROJECT_URL).trim() || DEFAULT_PROJECT_URL;
-}
+module.exports = {
+    name: 'github',
+    aliases: ['repo', 'git', 'source', 'sc', 'script'],
+    category: 'general',
+    description: 'Show bot GitHub repository and statistics',
+    usage: '.github',
+    ownerOnly: false,
 
-function extractIncomingText(message = {}) {
-  return String(
-    message?.message?.conversation ||
-    message?.message?.extendedTextMessage?.text ||
-    message?.message?.imageMessage?.caption ||
-    message?.message?.videoMessage?.caption ||
-    ''
-  ).trim().toLowerCase();
-}
-
-function isGithubRepoUrl(repoUrl = '') {
-  return /github\.com\/[^/]+\/[^/#?]+/i.test(String(repoUrl));
-}
-
-function parseRepoInfo(repoUrl = '') {
-  const match = String(repoUrl).match(/github\.com\/([^/]+)\/([^/#?]+)/i);
-  if (!match) return null;
-
-  return {
-    owner: match[1],
-    repo: match[2].replace(/\.git$/i, ''),
-    htmlUrl: `https://github.com/${match[1]}/${match[2].replace(/\.git$/i, '')}`
-  };
-}
-
-function buildProjectInfoMessage(projectUrl) {
-  let txt = `*📦 معلومات المشروع*
-
-`;
-  txt += `*الاسم:* ${settings.botName || 'Knight Bot'}
-`;
-  txt += `*الوصف:* ${settings.description || 'لا يوجد وصف'}
-`;
-  txt += `*الإصدار:* ${settings.version || 'غير معروف'}
-`;
-  txt += `*المطور:* ${settings.botOwner || 'غير معروف'}
-`;
-  txt += `*الرابط:* ${projectUrl}`;
-  return txt;
-}
-
-async function sendProjectResponse(sock, chatId, message, text) {
-  const imgPath = path.join(__dirname, '../assets/bot_image.jpg');
-  if (fs.existsSync(imgPath)) {
-    const imgBuffer = fs.readFileSync(imgPath);
-    await sock.sendMessage(chatId, { image: imgBuffer, caption: text }, { quoted: message });
-    return;
-  }
-
-  await sock.sendMessage(chatId, { text }, { quoted: message });
-}
-
-async function githubCommand(sock, chatId, message) {
-  const projectUrl = getConfiguredProjectUrl();
-  const incomingText = extractIncomingText(message);
-  const isDirectLinkCommand = ['.git', '.sc', '.script', '.repo'].includes(incomingText);
-
-  try {
-    if (isDirectLinkCommand) {
-      await sendProjectResponse(sock, chatId, message, `*🔗 رابط المشروع:*
-${projectUrl}`);
-      return;
+    async execute(sock, msg, args, extra) {
+        try {
+            const chatId = extra.from;
+            
+            // GitHub repository URL
+            const repoUrl = 'https://github.com/mruniquehacker/KnightBot-Mini';
+            const apiUrl = 'https://api.github.com/repos/mruniquehacker/KnightBot-Mini';
+            
+            // Send loading message
+            const loadingMsg = await extra.reply('🔍 Fetching GitHub repository information...');
+            
+            try {
+                // Fetch repository data from GitHub API
+                const response = await axios.get(apiUrl, {
+                    headers: {
+                        'User-Agent': 'KnightBot-Mini'
+                    }
+                });
+                
+                const repo = response.data;
+                
+                // Format the response with proper styling
+                let message = `╭━━『 *GitHub Repository* 』━━╮\n\n`;
+                message += `🤖 *Bot Name:* ${config.botName}\n`;
+                message += `🔗 *Repository:* ${repo.name}\n`;
+                message += `👨‍💻 *Owner:* ${repo.owner.login}\n`;
+                message += `📄 *Description:* ${repo.description || 'No description provided'}\n`;
+                message += `🌐 *URL:* ${repo.html_url}\n\n`;
+                
+                message += `📊 *Repository Statistics*\n`;
+                message += `⭐ *Stars:* ${repo.stargazers_count.toLocaleString()}\n`;
+                message += `🍴 *Forks:* ${repo.forks_count.toLocaleString()}\n`;
+                message += `👁️ *Watchers:* ${repo.watchers_count.toLocaleString()}\n`;
+                message += `📦 *Size:* ${(repo.size / 1024).toFixed(2)} MB\n\n`;
+                
+                message += `🔗 *Quick Links*\n`;
+                message += `⭐ Star: ${repo.html_url}/stargazers\n`;
+                message += `🍴 Fork: ${repo.html_url}/fork\n`;
+                message += `📥 Clone: git clone ${repo.clone_url}\n\n`;
+                
+                message += `╰━━━━━━━━━━━━━━━╯\n\n`;
+                message += `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${config.botName}*`;
+                
+                // Edit the loading message with the actual data
+                await sock.sendMessage(chatId, {
+                    text: message,
+                    edit: loadingMsg.key
+                });
+                
+            } catch (apiError) {
+                // Fallback message if API fails
+                console.error('GitHub API Error:', apiError.message);
+                
+                let fallbackMessage = `╭━━『 *GitHub Repository* 』━━╮\n\n`;
+                fallbackMessage += `🤖 *Bot Name:* ${config.botName}\n`;
+                fallbackMessage += `🔗 *Repository:* KnightBot-Mini\n`;
+                fallbackMessage += `👨‍💻 *Owner:* mruniquehacker\n`;
+                fallbackMessage += `🌐 *URL:* ${repoUrl}\n\n`;
+                fallbackMessage += `⚠️ *Note:* Unable to fetch real-time statistics.\n`;
+                fallbackMessage += `Please visit the repository directly for latest stats.\n\n`;
+                fallbackMessage += `╰━━━━━━━━━━━━━━━╯\n\n`;
+                fallbackMessage += `> *ᴘᴏᴡᴇʀᴇᴅ ʙʏ ${config.botName}*`;
+                
+                await sock.sendMessage(chatId, {
+                    text: fallbackMessage,
+                    edit: loadingMsg.key
+                });
+            }
+            
+        } catch (error) {
+            console.error('GitHub command error:', error);
+            await extra.reply(`❌ Error: ${error.message}`);
+        }
     }
-
-    if (!isGithubRepoUrl(projectUrl)) {
-      await sendProjectResponse(sock, chatId, message, buildProjectInfoMessage(projectUrl));
-      return;
-    }
-
-    const repoInfo = parseRepoInfo(projectUrl);
-    if (!repoInfo) {
-      await sendProjectResponse(sock, chatId, message, buildProjectInfoMessage(projectUrl));
-      return;
-    }
-
-    const apiUrl = `https://api.github.com/repos/${repoInfo.owner}/${repoInfo.repo}`;
-    const res = await fetch(apiUrl, {
-      headers: {
-        'User-Agent': 'KnightBot-MD'
-      }
-    });
-
-    if (!res.ok) throw new Error('GitHub API request failed');
-    const json = await res.json();
-
-    let txt = `*📦 معلومات المستودع*
-
-`;
-    txt += `*الاسم:* ${json.full_name || `${repoInfo.owner}/${repoInfo.repo}`}
-`;
-    txt += `*الوصف:* ${json.description || 'لا يوجد وصف'}
-`;
-    txt += `*النجوم:* ${json.stargazers_count ?? 0}
-`;
-    txt += `*الفوركات:* ${json.forks_count ?? 0}
-`;
-    txt += `*المشاهدات:* ${json.watchers_count ?? 0}
-`;
-    txt += `*الحجم:* ${Number.isFinite(json.size) ? (json.size / 1024).toFixed(2) : '0.00'} MB
-`;
-    txt += `*آخر تحديث:* ${json.updated_at ? moment(json.updated_at).format('DD/MM/YYYY - HH:mm:ss') : 'غير معروف'}
-`;
-    txt += `*الرابط:* ${projectUrl}`;
-
-    await sendProjectResponse(sock, chatId, message, txt);
-  } catch (error) {
-    console.error('githubCommand error:', error);
-    await sendProjectResponse(sock, chatId, message, buildProjectInfoMessage(projectUrl));
-  }
-}
-
-module.exports = githubCommand;
+};

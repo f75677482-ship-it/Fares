@@ -1,47 +1,30 @@
-const os = require('os');
-const settings = require('../settings.js');
+/**
+ * Ping Command - Check bot response time
+ */
 
-function formatTime(seconds) {
-    const days = Math.floor(seconds / (24 * 60 * 60));
-    seconds = seconds % (24 * 60 * 60);
-    const hours = Math.floor(seconds / (60 * 60));
-    seconds = seconds % (60 * 60);
-    const minutes = Math.floor(seconds / 60);
-    seconds = Math.floor(seconds % 60);
-
-    let time = '';
-    if (days > 0) time += `${days}d `;
-    if (hours > 0) time += `${hours}h `;
-    if (minutes > 0) time += `${minutes}m `;
-    if (seconds > 0 || time === '') time += `${seconds}s`;
-
-    return time.trim();
-}
-
-async function pingCommand(sock, chatId, message) {
-    try {
+module.exports = {
+    name: 'ping',
+    aliases: ['p'],
+    category: 'general',
+    description: 'Check bot response time',
+    usage: '.ping',
+    
+    async execute(sock, msg, args, extra) {
+      try {
         const start = Date.now();
-        await sock.sendMessage(chatId, { text: 'Pong!' }, { quoted: message });
+        const sent = await extra.reply('🏓 Pinging...');
         const end = Date.now();
-        const ping = Math.round((end - start) / 2);
-
-        const uptimeInSeconds = process.uptime();
-        const uptimeFormatted = formatTime(uptimeInSeconds);
-
-        const botInfo = `
-┏━━〔 🤖 𝐊𝐧𝐢𝐠𝐡𝐭𝐁𝐨𝐭-𝐌𝐃 〕━━┓
-┃ 🚀 Ping     : ${ping} ms
-┃ ⏱️ Uptime   : ${uptimeFormatted}
-┃ 🔖 Version  : v${settings.version}
-┗━━━━━━━━━━━━━━━━━━━┛`.trim();
-
-        // Reply to the original message with the bot info
-        await sock.sendMessage(chatId, { text: botInfo},{ quoted: message });
-
-    } catch (error) {
-        console.error('Error in ping command:', error);
-        await sock.sendMessage(chatId, { text: '❌ Failed to get bot status.' });
+        
+        const responseTime = end - start;
+        
+        await sock.sendMessage(extra.from, {
+          text: `🏓 *Pong!*\n⚡ Response Time: ${responseTime}ms`,
+          edit: sent.key
+        });
+        
+      } catch (error) {
+        await extra.reply(`❌ Error: ${error.message}`);
+      }
     }
-}
-
-module.exports = pingCommand;
+  };
+  

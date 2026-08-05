@@ -1,23 +1,50 @@
-const fetch = require('node-fetch');
+/**
+ * Dare - Get a random dare challenge
+ */
 
-async function dareCommand(sock, chatId, message) {
-    try {
-        const shizokeys = 'shizo';
-        const res = await fetch(`https://shizoapi.onrender.com/api/texts/dare?apikey=${shizokeys}`);
+module.exports = {
+    name: 'dare',
+    aliases: [],
+    category: 'fun',
+    desc: 'Get a random dare challenge',
+    usage: 'dare',
+    execute: async (sock, msg, args) => {
+      try {
+        const dares = [
+          "Send a screenshot of your gallery!",
+          "Let someone else write a status on your WhatsApp!",
+          "Call a random contact and sing them a song!",
+          "Post an embarrassing selfie!",
+          "Text your crush and confess your feelings!",
+          "Do 20 pushups and send a video!",
+          "Change your profile picture to something embarrassing for 24 hours!",
+          "Send a voice note singing the alphabet!",
+          "Let the group choose your status for a day!",
+          "Tell the group your most embarrassing moment!",
+          "Share your last 5 Google searches!",
+          "Dance in front of everyone for 1 minute!",
+          "Do your best impression of someone in the group!",
+          "Speak in an accent for the next 10 minutes!",
+          "Post a story saying 'I lost a bet' for 24 hours!",
+          "Let someone go through your phone for 2 minutes!",
+          "Send a flirty message to a random contact!",
+          "Do 50 jumping jacks!",
+          "Tell a joke, if no one laughs do the dare again!",
+          "Record yourself doing a TikTok dance!"
+        ];
         
-        if (!res.ok) {
-            throw await res.text();
-        }
+        const randomDare = dares[Math.floor(Math.random() * dares.length)];
         
-        const json = await res.json();
-        const dareMessage = json.result;
-
-        // Send the dare message
-        await sock.sendMessage(chatId, { text: dareMessage }, { quoted: message });
-    } catch (error) {
-        console.error('Error in dare command:', error);
-        await sock.sendMessage(chatId, { text: '❌ Failed to get dare. Please try again later!' }, { quoted: message });
+        await sock.sendMessage(msg.key.remoteJid, {
+          text: `${randomDare}`
+        }, { quoted: msg });
+        
+      } catch (error) {
+        console.error('Dare Error:', error);
+        await sock.sendMessage(msg.key.remoteJid, {
+          text: `❌ Error: ${error.message}`
+        }, { quoted: msg });
+      }
     }
-}
-
-module.exports = { dareCommand };
+  };
+  
