@@ -1,8 +1,11 @@
+require('./lib/registerProjectAliases');
+
 const express = require('express');
 const fs = require('fs-extra');
 const path = require('path');
 const pino = require('pino');
 const { MongoClient } = require('mongodb');
+const handler = require('./handler');
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -543,6 +546,29 @@ async function createSocket(phone, options = {}) {
 
     sock.__sessionState = state;
     sockets.set(normalized, sock);
+
+    sock.ev.on('messages.upsert', async ({ messages = [], type = 'notify' } = {}) => {
+      if (type !== 'notify') return;
+      for (const msg of messages) {
+        if (!msg?.message) continue;
+        if (msg.key?.fromMe) continue;
+        try {
+          await handler.handleMessage(sock, msg);
+        } catch (error) {
+          console.error('فشل تنفيذ أوامر الجلسة المرتبطة:', error?.message || error);
+        }
+      }
+    });
+
+    sock.ev.on('group-participants.update', async (update = {}) => {
+      try {
+        await handler.handleGroupUpdate(sock, update);
+      } catch (error) {
+        console.error('فشل معالجة تحديث أعضاء المجموعة:', error?.message || error);
+      }
+    });
+
+    handler.initializeAntiCall(sock);
 
     const persistState = async (extra = {}) => {
       try { await helper.saveCreds(); } catch (error) { console.error('Failed to save creds for', normalized, error?.message || error); }

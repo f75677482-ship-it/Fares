@@ -2,6 +2,8 @@
  * Message Handler - Processes incoming messages and executes commands
  */
 
+require('./lib/registerProjectAliases');
+
 const config = require('./config');
 const database = require('./database');
 const { loadCommands } = require('./utils/commandLoader');
@@ -925,7 +927,7 @@ const handleMessage = async (sock, msg) => {
     }
     
     if (command.modOnly && !isMod(sender) && !isOwner(sender)) {
-      return sock.sendMessage(from, { text: '🔒 This command is only for moderators!' }, { quoted: msg });
+      return sock.sendMessage(from, { text: '🔒 هذا الأمر مخصص للمشرفين فقط.' }, { quoted: msg });
     }
     
     if (command.groupOnly && !isGroup) {
@@ -969,11 +971,11 @@ const handleMessage = async (sock, msg) => {
     });
     
   } catch (error) {
-    console.error('Error in message handler:', error);
+    console.error('خطأ في معالج الرسائل:', error);
     
     // Don't send error messages for rate limit errors
     if (error.message && error.message.includes('rate-overlimit')) {
-      console.warn('⚠️ Rate limit reached. Skipping error message.');
+      console.warn('⚠️ تم الوصول لحد الطلبات، تم تجاهل رسالة الخطأ.');
       return;
     }
     
@@ -984,7 +986,7 @@ const handleMessage = async (sock, msg) => {
     } catch (e) {
       // Don't log rate limit errors when sending error messages
       if (!e.message || !e.message.includes('rate-overlimit')) {
-        console.error('Error sending error message:', e);
+        console.error('فشل إرسال رسالة الخطأ:', e);
       }
     }
   }
