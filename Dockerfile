@@ -12,21 +12,14 @@ RUN apt-get update && apt-get install -y \
 # تحديد مجلد العمل داخل السيرفر
 WORKDIR /app
 
-# منع تنزيل Chromium أثناء تثبيت Puppeteer داخل بيئة الاستضافة
-ENV PUPPETEER_SKIP_DOWNLOAD=true \
-    PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true
-
-# نسخ ملفات الاعتماد أولاً للاستفادة من الكاش
-COPY package*.json ./
+# نسخ ملفات المشروع بالكامل إلى الحاوية
+COPY . .
 
 # تثبيت مكتبات بايثون
 RUN pip install --no-cache-dir python-telegram-bot requests
 
-# تثبيت مكتبات Node.js من ملف القفل بشكل ثابت
-RUN npm ci --omit=dev --no-audit --no-fund
+# تثبيت مكتبات Node.js مباشرة من المجلد الحالي (لأن الملفات كلها في الجذر)
+RUN npm install
 
-# نسخ بقية ملفات المشروع بعد تثبيت التبعيات
-COPY . .
-
-# تحديد الأمر الإفتراضي عند تشغيل الحاوية
+# تحديد الأمر الإفتراضي عند تشغيل الحاوية (تشغيل ملف بايثون الرئيسي)
 CMD ["node", "index.js"]

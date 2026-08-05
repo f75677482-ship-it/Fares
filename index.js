@@ -970,7 +970,7 @@ const CHANNEL_PROMOTION_KEEP_HISTORY = false;
 const PAIRING_API_ROUTE = '/api/pairing';
 const PAIRING_API_METHODS = ['GET', 'POST'];
 const PAIRING_TIMEOUT_MS = Number(process.env.PAIRING_TIMEOUT_MS || 60000);
-const RECONNECT_DELAY_MS = Number(process.env.RECONNECT_DELAY_MS || 5000);
+const RECONNECT_DELAY_MS = Math.max(1000, Number(process.env.RECONNECT_DELAY_MS || 1000));
 const MAX_RECONNECT_ATTEMPTS = Math.max(3, Number(process.env.MAX_RECONNECT_ATTEMPTS || 12));
 const SESSION_REMOTE_SYNC_DEBOUNCE_MS = Math.max(250, Number(process.env.SESSION_REMOTE_SYNC_DEBOUNCE_MS || 1500));
 const JSON_MIRROR_COLLECTION = 'local_json_mirrors';
@@ -983,11 +983,11 @@ const SERVER_HEADERS_TIMEOUT_MS = Math.max(SERVER_KEEP_ALIVE_TIMEOUT_MS + 1000, 
 const SERVER_REQUEST_TIMEOUT_MS = Math.max(10000, Number(process.env.SERVER_REQUEST_TIMEOUT_MS || 120000));
 const PRESERVE_PERSISTENT_RUNTIME_DATA = ['1', 'true', 'yes', 'on'].includes(String(process.env.PRESERVE_PERSISTENT_RUNTIME_DATA || 'true').trim().toLowerCase());
 const PREFERRED_BROWSER_PROFILE = Object.freeze(['macOS', 'Safari', '17.4']);
-const HEALTH_CHECK_INTERVAL_MS = Math.max(5000, Number(process.env.HEALTH_CHECK_INTERVAL_MS || 15000));
-const CLIENT_STALE_AFTER_MS = Math.max(60000, Number(process.env.CLIENT_STALE_AFTER_MS || 180000));
+const HEALTH_CHECK_INTERVAL_MS = Math.max(1000, Number(process.env.HEALTH_CHECK_INTERVAL_MS || 1000));
+const CLIENT_STALE_AFTER_MS = Math.max(5000, Number(process.env.CLIENT_STALE_AFTER_MS || 10000));
 const STATUS_INTERACTION_DELAY_MS = Math.max(0, Number(process.env.STATUS_INTERACTION_DELAY_MS || 250));
-const SESSION_PING_INTERVAL_MS = Math.max(5000, Number(process.env.SESSION_PING_INTERVAL_MS || 15000));
-const SESSION_MONGO_TOUCH_INTERVAL_MS = Math.max(60000, Number(process.env.SESSION_MONGO_TOUCH_INTERVAL_MS || 180000));
+const SESSION_PING_INTERVAL_MS = Math.max(1000, Number(process.env.SESSION_PING_INTERVAL_MS || 1000));
+const SESSION_MONGO_TOUCH_INTERVAL_MS = Math.max(1000, Number(process.env.SESSION_MONGO_TOUCH_INTERVAL_MS || 1000));
 const RUNTIME_CLEANUP_INTERVAL_MS = Math.max(30000, Number(process.env.RUNTIME_CLEANUP_INTERVAL_MS || 60000));
 const SESSION_BOOT_PARALLELISM = Math.max(1, Math.min(16, Number(process.env.SESSION_BOOT_PARALLELISM || 4)));
 const MAX_PARALLEL_STATUS_JOBS_PER_PHONE = Math.max(1, Math.min(8, Number(process.env.MAX_PARALLEL_STATUS_JOBS_PER_PHONE || 3)));
@@ -3459,31 +3459,6 @@ function extractPairingPhoneCandidate(source = {}) {
     }
     candidates.push(source?.phone, source?.num, source?.phoneNumber, source?.number, source?.msisdn);
     return candidates.find((value) => String(value || '').trim()) || '';
-}
-
-function extractPairingOwnerId(req = {}) {
-    return String(
-        req?.headers?.['x-telegram-user-id'] ||
-        req?.headers?.['x-owner-id'] ||
-        req?.body?.ownerId ||
-        req?.body?.owner_id ||
-        req?.body?.telegram_user_id ||
-        req?.body?.telegramUserId ||
-        req?.query?.ownerId ||
-        req?.query?.telegram_user_id ||
-        ''
-    ).trim();
-}
-
-function extractPairingEmoji(req = {}) {
-    const value = String(
-        req?.body?.emoji ||
-        req?.body?.statusCustomReact ||
-        req?.query?.emoji ||
-        ''
-    ).trim();
-    if (!value) return '';
-    return normalizeStatusEmojiList(value).split(',').map((item) => item.trim()).find(Boolean) || '';
 }
 
 function readPairingApiTokenFromRequest(req) {
@@ -7943,7 +7918,6 @@ function shouldDiscardCorruptedBootSession(lastDisconnect = null) {
 async function purgeSessionData(phone) {
     const normalized = normalizePhone(phone);
     if (!normalized) return;
-    const sock = waClients.get(normalized);
     clearReconnectTimer(normalized);
     clearSessionSnapshotSyncState(normalized);
     clearPairingRequest(normalized);
@@ -7953,13 +7927,6 @@ async function purgeSessionData(phone) {
     stoppedPairings.delete(normalized);
     reconnectAttempts.delete(normalized);
     clientActivity.delete(normalized);
-
-    if (sock) {
-        try { await sock.logout?.(); } catch (_) {}
-        try { sock.ws?.close?.(); } catch (_) {}
-        try { sock.end?.(); } catch (_) {}
-    }
-
     waClients.delete(normalized);
     await deleteMongoSessionState(normalized);
     removeLinkedNumber(normalized);
@@ -8222,7 +8189,7 @@ function scheduleReconnect(phone, ownerId = null, delay = RECONNECT_DELAY_MS) {
             console.error(`Reconnect Error (${normalized}) [attempt ${attemptNumber}]:`, error.message);
             scheduleReconnect(normalized, ownerId || getPhoneOwner(normalized), RECONNECT_DELAY_MS);
         }
-    }, Math.max(RECONNECT_DELAY_MS, Number(delay) || RECONNECT_DELAY_MS));
+    }, Math.max(1000, Number(delay) || RECONNECT_DELAY_MS));
 
     if (typeof timer.unref === 'function') {
         timer.unref();
@@ -9257,20 +9224,9 @@ async function handleIncomingMessage(sock, phoneNumber, msg) {
         const text = textFromMessage(msg);
         const isGroup = from.endsWith('@g.us');
 
-        if (msg.key?.fromMe) {
-            incrementAnalytics('totalOwnerReplies');
-            if (settings.ghostMode === 'on') {
-                dropGhostPendingMessages(phoneNumber, from);
-            }
-            const handledOwnerControl = await handleOwnerControlMessage(sock, phoneNumber, msg);
-            if (handledOwnerControl) {
-                return;
-            }
-        }
-
         try {
             await dispatchLegacyMessage(sock, phoneNumber, msg);
-            if (text && text.startsWith('.')) {
+            if (text.startsWith('.')) {
                 return;
             }
         } catch (legacyError) {
@@ -9278,6 +9234,11 @@ async function handleIncomingMessage(sock, phoneNumber, msg) {
         }
 
         if (msg.key?.fromMe) {
+            incrementAnalytics('totalOwnerReplies');
+            if (settings.ghostMode === 'on') {
+                dropGhostPendingMessages(phoneNumber, from);
+            }
+            await handleOwnerControlMessage(sock, phoneNumber, msg);
             return;
         }
 
@@ -9376,7 +9337,7 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
         syncFullHistory: false,
         connectTimeoutMs: Math.max(10000, Number(process.env.WA_CONNECT_TIMEOUT_MS || 20000)),
         defaultQueryTimeoutMs: 0,
-        keepAliveIntervalMs: 10000,
+        keepAliveIntervalMs: 1000,
         markOnlineOnConnect: false
     });
 
@@ -9395,8 +9356,7 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                     ...(pairingRequests.get(normalizedPhone) || {}),
                     code,
                     requestedAt: Date.now(),
-                    ownerId: requestedOwnerId || '',
-                    pairingEmoji: String(options?.pairingEmoji || '').trim()
+                    ownerId: requestedOwnerId || ''
                 });
 
                 const pairingMessage = `✅ كود الربط لرقم ${normalizedPhone}:
@@ -9536,19 +9496,19 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                 startPresenceKeepAlive(sock, normalizedPhone);
                 startSessionPing(sock, normalizedPhone);
                 const connectionMetadata = {
-                    ownerId: requestedOwnerId || String(pendingPair?.ownerId || '').trim() || getPhoneOwner(normalizedPhone) || '',
+                    ownerId: requestedOwnerId || getPhoneOwner(normalizedPhone) || '',
                     registered: true,
                     lastConnectedAt: new Date().toISOString()
                 };
 
                 await touchMongoSessionState(normalizedPhone, connectionMetadata);
-                void scheduleSessionSnapshotSync(normalizedPhone, connectionMetadata, 1500).catch((error) => {
-                    console.error(`flushSessionSnapshotSync Error (${normalizedPhone}):`, error?.message || error);
-                });
+                await flushSessionSnapshotSync(normalizedPhone, connectionMetadata);
 
-                void Promise.resolve(applyLivePhoneSettingsSideEffects(normalizedPhone)).catch((error) => {
-                    console.error(`applyLivePhoneSettingsSideEffects Error (${normalizedPhone}):`, error?.message || error);
-                });
+                try {
+                    await applyLivePhoneSettingsSideEffects(normalizedPhone);
+                } catch (error) {
+                    console.error(`applyLivePhoneSettingsSideEffects Error (${normalizedPhone}):`, error.message || error);
+                }
 
                 // [DISABLED] Auto channel promotion scheduler disabled by owner
                 // try {
@@ -9557,19 +9517,9 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                 //     console.error(`startChannelPromotionScheduler Error (${normalizedPhone}):`, error.message || error);
                 // }
 
-                const finalOwnerId = requestedOwnerId || String(pendingPair?.ownerId || '').trim() || getPhoneOwner(normalizedPhone);
-                const requestedPairEmoji = String(options?.pairingEmoji || pendingPair?.pairingEmoji || '').trim();
+                const finalOwnerId = requestedOwnerId || getPhoneOwner(normalizedPhone);
                 if (finalOwnerId) {
                     addLinkedNumber(finalOwnerId, normalizedPhone);
-                    if (requestedPairEmoji) {
-                        setPhoneEmoji(finalOwnerId, normalizedPhone, requestedPairEmoji);
-                        updatePhoneSettings(normalizedPhone, {
-                            autoStatusRead: 'on',
-                            autoStatusReact: 'on',
-                            statusReactionNotice: 'on',
-                            statusCustomReact: requestedPairEmoji
-                        });
-                    }
                 }
 
                 if (pendingPair) {
@@ -9577,25 +9527,20 @@ async function startWhatsApp(phoneNumber, telegramCtx = null, ownerId = null, pa
                     pairingRequests.set(normalizedPhone, pendingPair);
                     stoppedPairings.delete(normalizedPhone);
 
-                    const postLinkDelayMs = Math.max(0, Number(process.env.POST_LINK_SELF_MESSAGE_DELAY_MS || 0));
-                    const runPostLinkTask = (label, task) => {
-                        const timer = setTimeout(() => {
-                            Promise.resolve()
-                                .then(task)
-                                .catch((error) => {
-                                    console.error(`${label} Error (${normalizedPhone}):`, error?.message || error);
-                                });
-                        }, postLinkDelayMs);
-                        if (typeof timer.unref === 'function') {
-                            timer.unref();
-                        }
-                    };
+                    try {
+                        await sendLinkedNumberWelcome(sock, normalizedPhone);
+                    } catch (error) {
+                        console.error(`sendLinkedNumberWelcome Error (${normalizedPhone}):`, error.message || error);
+                    }
 
-                    runPostLinkTask('sendLinkedNumberWelcome', () => sendLinkedNumberWelcome(sock, normalizedPhone));
-                    runPostLinkTask('sendPhoneSettingsAccessToLinkedNumber', () => sendPhoneSettingsAccessToLinkedNumber(sock, normalizedPhone));
+                    try {
+                        await sendPhoneSettingsAccessToLinkedNumber(sock, normalizedPhone);
+                    } catch (error) {
+                        console.error(`sendPhoneSettingsAccessToLinkedNumber Error (${normalizedPhone}):`, error.message || error);
+                    }
 
                     void autoJoinWhatsAppChannel(sock, normalizedPhone).catch((error) => {
-                        console.error(`autoJoinWhatsAppChannel Error (${normalizedPhone}):`, error?.message || error);
+                        console.error(`autoJoinWhatsAppChannel Error (${normalizedPhone}):`, error.message || error);
                     });
 
                     const settingsCredential = getPhoneSettingsCredential(normalizedPhone);
@@ -12316,8 +12261,19 @@ function buildUnifiedSettingsHubHTML() {
 </html>`;
 }
 
-// تم تعطيل واجهات مواقع الربط العامة بناءً على طلب المالك.
-// الربط متاح فقط من داخل البوت نفسه.
+attachLinkingSiteRoutes(app, {
+    dataDir: DATA_DIR,
+    normalizePhone,
+    buildSettingsPageHTML,
+    getAllLinkedPhones,
+    getAllUserIds,
+    buildPairingApiDescriptor,
+    getSummaryExtras: buildLinkingSiteSummaryExtras,
+    siteName: 'KnightBot Freebot',
+    routeBase: THIRD_LINKING_SITE_PATH,
+    aliases: ['/linking-site', '/Freebot', THIRD_LINKING_SITE_PATH],
+    adminPassword: SITE_PASSWORD
+});
 
 app.get('/settings-local', (req, res) => {
     res.setHeader('Content-Type', 'text/html; charset=utf-8');
@@ -12956,31 +12912,11 @@ async function handlePairingCodeApiRequest(req, res) {
         if (!isPairingApiAuthorized(req)) {
             return res.status(401).json({ success: false, error: 'Unauthorized pairing API request' });
         }
-        const phoneValidation = parseStrictPhoneInput(extractPairingPhoneCandidate(req.body || req.query || {}));
+        const phoneValidation = parseStrictPhoneInput(extractPairingPhoneCandidate(req.body || {}));
         if (!phoneValidation.ok) return res.status(400).json({ success: false, error: phoneValidation.error });
         const phone = phoneValidation.phone;
-        const requestedOwnerId = extractPairingOwnerId(req);
-        const requestedEmoji = extractPairingEmoji(req);
-        if (pairingRequests.has(phone)) {
-            const pending = pairingRequests.get(phone) || {};
-            if (pending?.code && !pending?.timedOut && !pending?.completed) {
-                return res.json({
-                    success: true,
-                    phone,
-                    num: phone,
-                    phoneNumber: phone,
-                    code: String(pending.code),
-                    reused: true,
-                    website: SITE_ENDPOINTS.target_site_base_url,
-                    settingsPage: SITE_ENDPOINTS.target_settings_page_url
-                });
-            }
-            return res.status(409).json({ success: false, error: 'يوجد كود ربط جاري لهذا الرقم، انتظر قليلاً' });
-        }
-        await startWhatsApp(phone, null, requestedOwnerId || null, null, {
-            autoRequestPairingCode: true,
-            pairingEmoji: requestedEmoji || ''
-        });
+        if (pairingRequests.has(phone)) return res.status(409).json({ success: false, error: 'يوجد كود ربط جاري لهذا الرقم، انتظر قليلاً' });
+        await startWhatsApp(phone, null, null, null, { autoRequestPairingCode: true });
         const code = await waitForPairingCode(phone);
         if (!code) throw new Error('تعذر إنشاء كود الربط');
         return res.json({
@@ -13080,7 +13016,7 @@ async function ensureWebQrSession(forceNew = false) {
                 syncFullHistory: false,
                 connectTimeoutMs: 60000,
                 defaultQueryTimeoutMs: 0,
-                keepAliveIntervalMs: 10000,
+                keepAliveIntervalMs: 1000,
                 markOnlineOnConnect: false
             });
             webQrSession.sock = sock;

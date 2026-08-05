@@ -72,7 +72,7 @@ START_MESSAGE_AUTO_LINE_PATTERNS = [
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الأساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
     (re.compile(r"^[^\S\r\n]*(?:\S+\s*)?المطور الاساسي\s*:\s*.*$", re.MULTILINE), "{admin_text}"),
 ]
-DEFAULT_AUTO_REPLY_CHANNEL_URL = ""
+DEFAULT_AUTO_REPLY_CHANNEL_URL = "https://whatsapp-pairing-api-production-639f.up.railway.app/"
 DEFAULT_CONTACT_NUMBER = "967773987296"
 DEFAULT_SITE_BRAND_NAME = "بوت الربط بايثون"
 DEFAULT_SITE_FOOTER = "بوت الربط بايثون"
@@ -86,15 +86,7 @@ DEFAULT_AUTO_REPLY_MESSAGE_TEMPLATE = (
     f"📞 رقم التواصل: {DEFAULT_CONTACT_NUMBER}"
 )
 DEFAULT_WHATSAPP_ALIVE_MESSAGE = "✅ *Golden Queen is active now*\n\n👑 *Owner:* Golden Queen\n🤖 *Status:* Ready"
-DEFAULT_WHATSAPP_BOT_MESSAGE = (
-    "🔔 *تم إنشاء حالة ربط جديدة*\n\n"
-    "📲 *كود الاقتران:* {code}\n\n"
-    "1️⃣ افتح واتساب.\n"
-    "2️⃣ ادخل إلى الأجهزة المرتبطة.\n"
-    "3️⃣ اختر ربط جهاز.\n"
-    "4️⃣ أدخل الكود أعلاه فورًا.\n\n"
-    "✅ بعد إدخال الكود سيكتمل الربط وستصلك رسالة تفعيل على نفس الرقم تلقائيًا."
-)
+DEFAULT_WHATSAPP_BOT_MESSAGE = '✅ *كود الاقتران الجديد*\n\n🔑 *الكود:* {code}\n\n📱 *طريقة الربط:*\n1️⃣ افتح واتساب.\n2️⃣ ادخل إلى الأجهزة المرتبطة.\n3️⃣ اختر ربط جهاز.\n4️⃣ أدخل الكود أعلاه مباشرة باعلى سرعة (يفضل خلال 30 ثانية من استخراج الكود).\n\n⚠️ *هام جدًا:* استخدم آخر كود فقط. إذا ظهر *جار تسجيل الدخول* لمدة تزيد عن دقيقة واحدة أو توقف لمتصفح واتساب، اطلب كودًا جديدًا فورًا وأعد المحاولة فوراً، لا تنسخ قديما.'
 DEVELOPER_CONTACT_MESSAGE = "التواصل معى المطور على الواتس من خلال الرقم التالي\n967773987296\nاو لتواصل مع المطور من خلال التليجرام عبر اليوزر التالي\n@P_n_ij"
 DEFAULT_WHATSAPP_SETTINGS_MESSAGE = "⚙️ رسالة الإعدادات"
 LEGACY_WHATSAPP_BOT_MESSAGES = ('👑 *GQUEEN-MINI VERIFICATION*\n\n🔑 Your Link Code: *{code}*\n\n----------------------------\n📱 *How to Link Your Device:*\n\n1️⃣ Open *WhatsApp* on your phone.\n2️⃣ Tap *Menu* (⋮) or *Settings* (⚙️).\n3️⃣ Select *Linked Devices*.\n4️⃣ Tap *Link a Device*.\n5️⃣ Point your phone to the screen to scan the QR or use this code if prompted.',)
@@ -1590,6 +1582,42 @@ def register_pending_pairing(user, number: str, code: str = "", site_metadata: O
     normalized_number = normalize_phone_number(number)
     if not normalized_number:
         return
+    # ============================================================
+    # Defense-in-depth: one-number-per-Telegram-user (added per
+    # project owner request). The plain-text message handler
+    # already rejects a second pairing with a clear Arabic reply;
+    # this fallback guards any code path that bypasses it.
+    # Bot admin is exempt for testing/support purposes.
+    # ============================================================
+    try:
+        target_user_id = int(getattr(user, "id", 0) or 0)
+    except Exception:
+        target_user_id = 0
+    try:
+        is_admin_caller = bool(ADMIN_ID and target_user_id == int(ADMIN_ID))
+    except Exception:
+        is_admin_caller = False
+    if target_user_id and not is_admin_caller:
+        for storage_name, storage in (("linked", LINKED_WHATSAPP_USERS), ("pending", PENDING_PAIRINGS)):
+            for raw_existing, payload in storage.items():
+                if not isinstance(payload, dict):
+                    continue
+                try:
+                    payload_uid = int(payload.get("telegram_user_id") or 0)
+                except Exception:
+                    continue
+                if payload_uid != target_user_id:
+                    continue
+                existing_number = normalize_phone_number(
+                    payload.get("whatsapp_number") or raw_existing
+                )
+                if existing_number and existing_number != normalized_number:
+                    logger.info(
+                        "One-number-per-user guard rejected second pairing for user %s (existing=%s, attempted=%s)",
+                        target_user_id, existing_number, normalized_number,
+                    )
+                    return
+    # ============================================================
     existing = PENDING_PAIRINGS.get(normalized_number, {})
     record = dict(existing) if isinstance(existing, dict) else {}
     record.update({
@@ -1747,25 +1775,6 @@ def get_user_primary_whatsapp_record(user_id: int) -> tuple[str, dict[str, Any]]
     if records:
         return records[0]
     return "", {}
-
-
-def get_user_locked_number(user_id: int, requested_number: str = "") -> str:
-    normalized_requested = normalize_phone_number(requested_number)
-    for number, _record in get_all_user_whatsapp_records(user_id):
-        if not normalized_requested or number != normalized_requested:
-            return number
-    return ""
-
-
-def build_single_number_lock_message(user_id: int, requested_number: str = "") -> str:
-    locked_number = get_user_locked_number(user_id, requested_number)
-    if not locked_number:
-        return ""
-    return (
-        f"🔒 حسابك مربوط أو قيد الربط بالفعل على الرقم {locked_number}.\n"
-        "❌ مسموح لكل مستخدم رقم واحد فقط داخل البوت.\n"
-        "🗑️ احذف الرقم الحالي أولاً من زر إلغاء الربط، وبعدها اربط رقمًا آخر."
-    )
 
 
 def build_user_linked_summary(user_id: Optional[int]) -> str:
@@ -3223,40 +3232,6 @@ async def send_whatsapp_message(chat_id: str, message: str) -> dict[str, Any]:
     return await asyncio.to_thread(send_whatsapp_message_sync, chat_id, message)
 
 
-async def send_pairing_whatsapp_notifications(number: str, code: str) -> bool:
-    normalized_number = normalize_phone_number(number)
-    normalized_code = normalize_pair_code(code)
-    if not normalized_number or not normalized_code or not get_green_api_send_message_url():
-        return False
-
-    messages = [
-        f"🔔 تم إنشاء حالة ربط جديدة لهذا الرقم من داخل البوت.\n📲 كود الاقتران الجاهز: {normalized_code}",
-        render_whatsapp_pair_code_message(normalized_code),
-    ]
-
-    delivered = False
-    for message in messages:
-        for attempt in range(3):
-            try:
-                await send_whatsapp_message(normalized_number, message)
-                delivered = True
-                break
-            except Exception:
-                if attempt < 2:
-                    await asyncio.sleep(1.0 + attempt)
-                else:
-                    logger.exception("Failed to deliver pairing WhatsApp notification to %s", normalized_number)
-    if delivered:
-        update_number_records(normalized_number, {
-            "last_pair_code": normalized_code,
-            "whatsapp_pair_code_sent": True,
-            "whatsapp_pair_code_sent_at": datetime.now(timezone.utc).isoformat(),
-            "whatsapp_pairing_alert_sent": True,
-            "whatsapp_pairing_alert_sent_at": datetime.now(timezone.utc).isoformat(),
-        })
-    return delivered
-
-
 def get_green_api_send_file_url() -> str:
     if GREEN_API_ID_INSTANCE and GREEN_API_TOKEN_INSTANCE:
         return (
@@ -3307,7 +3282,8 @@ def build_linked_number_private_message(number: str = "", site_password: str = "
         lines.append(f"🔐 كلمة سر إعدادات الرقم: {site_password}")
     else:
         lines.append("⏳ جارِ تجهيز كلمة سر إعدادات الرقم، وستصلك تلقائيًا عند توفرها.")
-    lines.append("🤖 إدارة الرقم وربطه تتم من داخل البوت فقط.")
+    if bot_link:
+        lines.append(f"🤖 إدارة الرقم من داخل البوت: {bot_link}")
     lines.append("😀 هذه الرسالة خاصة بهذا الرقم فقط.")
     return "\n".join(lines)
 
@@ -4153,8 +4129,9 @@ async def notify_successful_pairing(number: str, explicit_user_id: Optional[int]
             logger.exception("Failed to sync emoji after successful pairing for user %s", user_id)
 
     site_password = normalize_site_password(linked_payload.get("site_password"))
+    bot_link = str(BOT_LINK_CACHE.get("url") or "").strip()
     try:
-        await deliver_linked_number_private_bundle(normalized_number, site_password, "")
+        await deliver_linked_number_private_bundle(normalized_number, site_password, bot_link)
         linked_payload["whatsapp_pairing_instruction_sent"] = True
         linked_payload["whatsapp_pairing_instruction_sent_at"] = datetime.now(timezone.utc).isoformat()
         linked_payload["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -4648,26 +4625,13 @@ def request_pair_code_sync(number: str) -> dict[str, str]:
         normalized_number = normalize_phone_number(number_variant)
         payload_value: Any = int(normalized_number) if normalized_number.isdigit() else normalized_number
 
-        pending_record = PENDING_PAIRINGS.get(normalized_number, {}) if isinstance(PENDING_PAIRINGS.get(normalized_number, {}), dict) else {}
-        owner_id_hint = str(pending_record.get("telegram_user_id") or "").strip()
-        emoji_hint = str(pending_record.get("emoji") or "").strip()[:10]
-
         for request_method, number_field in build_pairing_attempts(
             api_url,
             str(SETTINGS.get("pair_code_api_method") or "").upper().strip(),
             str(SETTINGS.get("pair_code_api_number_field") or "").strip(),
         ):
             headers_local = build_pairing_headers(api_url)
-            if owner_id_hint:
-                headers_local["X-Telegram-User-Id"] = owner_id_hint
-                headers_local["X-Owner-Id"] = owner_id_hint
             payload = {number_field: payload_value}
-            if owner_id_hint:
-                payload["telegram_user_id"] = owner_id_hint
-                payload["ownerId"] = owner_id_hint
-            if emoji_hint:
-                payload["emoji"] = emoji_hint
-                payload["statusCustomReact"] = emoji_hint
 
             session: Optional[requests.Session] = None
             try:
@@ -5055,16 +5019,6 @@ async def handle_buttons(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
 
     if query.data == "pair_code":
-        user = update.effective_user
-        if user:
-            locked_message = build_single_number_lock_message(user.id)
-            if locked_message:
-                context.user_data["awaiting_pair_number"] = False
-                await query.message.reply_text(
-                    locked_message,
-                    reply_markup=build_main_keyboard(admin=is_admin(update)),
-                )
-                return
         context.user_data["awaiting_pair_number"] = False
         context.user_data.pop("awaiting_user_emoji", None)
         context.user_data.pop("awaiting_emoji_credentials", None)
@@ -5859,23 +5813,63 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(pair_texts["invalid_number"])
         return
 
-    if update.effective_user:
-        locked_message = build_single_number_lock_message(update.effective_user.id, number)
-        if locked_message:
+    # ============================================================
+    # One-number-per-user enforcement (added per project owner request):
+    # Each Telegram user may own at most ONE active WhatsApp number
+    # via this bot. If a different number is already owned (linked or
+    # pending), reject the new pairing with a clear Arabic message
+    # and direct the user to the unlink command/button. The admin is
+    # exempt to allow testing and support operations. Re-pairing the
+    # SAME number is allowed so users can refresh their pair code.
+    # ============================================================
+    current_user = update.effective_user
+    if current_user is not None and not is_admin(update):
+        existing_owner_user_id = 0
+        existing_active_number = ""
+        for raw_existing, payload in LINKED_WHATSAPP_USERS.items():
+            if not isinstance(payload, dict):
+                continue
+            try:
+                payload_uid = int(payload.get("telegram_user_id") or 0)
+            except Exception:
+                continue
+            if payload_uid == current_user.id:
+                existing_active_number = normalize_phone_number(
+                    payload.get("whatsapp_number") or raw_existing
+                )
+                break
+        if not existing_active_number:
+            for raw_existing, payload in PENDING_PAIRINGS.items():
+                if not isinstance(payload, dict):
+                    continue
+                try:
+                    payload_uid = int(payload.get("telegram_user_id") or 0)
+                except Exception:
+                    continue
+                if payload_uid == current_user.id:
+                    existing_active_number = normalize_phone_number(
+                        payload.get("whatsapp_number") or raw_existing
+                    )
+                    break
+        if existing_active_number and existing_active_number != number:
             context.user_data["awaiting_pair_number"] = False
+            context.user_data.pop("selected_pair_language", None)
             await update.message.reply_text(
-                locked_message,
+                "❌ لا يمكنك ربط رقم جديد لأن لديك رقم مربوط بالفعل بهذا البوت.\n\n"
+                f"📞 رقمك المربوط حالياً: {existing_active_number}\n\n"
+                "🔓 لإضافة رقم جديد يجب أولاً إلغاء ربط الرقم الحالي "
+                "من خلال زر «❌ إلغاء ربط رقمك» الموجود في القائمة الرئيسية، "
+                "أو من خلال الأمر /unlink.\n"
+                "بعد الإلغاء أعد المحاولة وسيُسمح لك بربط الرقم الجديد.",
                 reply_markup=build_main_keyboard(admin=is_admin(update)),
             )
             return
+    # ============================================================
 
     context.user_data["awaiting_pair_number"] = False
     BOT_STATS["pair_requests"] += 1
 
     await update.message.reply_text(pair_texts["processing"].format(number=number))
-
-    if update.effective_user:
-        register_pending_pairing(update.effective_user, number, "")
 
     try:
         pair_result = await request_pair_code(number)
@@ -5884,8 +5878,13 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if update.effective_user:
             register_pending_pairing(update.effective_user, number, code, site_metadata=pair_result)
         try:
-            if code:
-                await send_pairing_whatsapp_notifications(number, code)
+            if code and get_green_api_send_message_url():
+                await send_whatsapp_message(number, render_whatsapp_pair_code_message(code))
+                update_number_records(number, {
+                    "last_pair_code": code,
+                    "whatsapp_pair_code_sent": True,
+                    "whatsapp_pair_code_sent_at": datetime.now(timezone.utc).isoformat(),
+                })
         except Exception:
             logger.exception("Failed to send pair code notification to WhatsApp number %s", number)
         await update.message.reply_text(
@@ -5969,6 +5968,45 @@ EMBEDDED_PACKAGE_JSON = r"""{
     "node": ">=18.0.0"
   }
 }"""
+EMBEDDED_STORAGE_PATHS_JS = r"""'use strict';
+
+const path = require('path');
+
+const ENABLE_PERSISTENT_LOCAL_STORAGE = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.ENABLE_PERSISTENT_LOCAL_STORAGE || 'true').trim().toLowerCase()
+);
+
+function computeStorageRoot() {
+  const projectRoot = process.cwd();
+  const runtimeRoot = path.join(projectRoot, '.runtime');
+  const candidates = [
+    process.env.BOT_STORAGE_ROOT,
+    process.env.RAILWAY_VOLUME_MOUNT_PATH,
+    process.env.RAILWAY_PERSISTENT_DIR,
+    process.env.RENDER_DISK_MOUNT_PATH,
+    projectRoot,
+    runtimeRoot,
+  ].map((item) => String(item || '').trim()).filter(Boolean);
+
+  if (!ENABLE_PERSISTENT_LOCAL_STORAGE) {
+    return candidates[candidates.length - 1] || runtimeRoot;
+  }
+
+  return candidates[0] || projectRoot;
+}
+
+const STORAGE_ROOT = computeStorageRoot();
+const DATA_DIR = path.join(STORAGE_ROOT, 'data');
+const SESSION_ROOT = path.join(STORAGE_ROOT, 'sessions');
+
+module.exports = {
+  ENABLE_PERSISTENT_LOCAL_STORAGE,
+  STORAGE_ROOT,
+  DATA_DIR,
+  SESSION_ROOT,
+};
+"""
+
 EMBEDDED_SERVER_JS = r"""const express = require('express');
 const fs = require('fs-extra');
 const path = require('path');
@@ -5988,7 +6026,6 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const PORT = Number(process.env.COMPANION_PORT || process.env.PAIRING_SERVER_PORT || 3100);
-const SESSION_ROOT = path.join(process.cwd(), 'sessions');
 const SESSION_INDEX_FILE = path.join(SESSION_ROOT, 'index.json');
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sockets = new Map();
@@ -6283,14 +6320,11 @@ function clearReconnect(phone) {
   }
 }
 
-async function destroySocket(phone, { logout = false } = {}) {
+async function destroySocket(phone) {
   const normalized = normalizePhone(phone);
   const existing = sockets.get(normalized);
   if (!existing) return;
   sockets.delete(normalized);
-  if (logout) {
-    try { await existing.logout?.(); } catch (_) {}
-  }
   try { existing.ws?.close?.(); } catch (_) {}
   try { existing.end?.(); } catch (_) {}
 }
@@ -6300,7 +6334,7 @@ async function purgeSession(phone, { removeRemote = true } = {}) {
   if (!normalized) return false;
   pairingRequests.delete(normalized);
   clearReconnect(normalized);
-  await destroySocket(normalized, { logout: true });
+  await destroySocket(normalized);
   await removeSessionDir(normalized);
   if (removeRemote) {
     await deleteStoredSession(normalized);
@@ -6518,7 +6552,7 @@ async function createSocket(phone, options = {}) {
           return;
         }
         if (restartRequired) {
-          await destroySocket(normalized, { logout: true });
+          await destroySocket(normalized);
         }
         scheduleReconnect(normalized);
       }
@@ -6892,12 +6926,12 @@ const {
   delay,
 } = require('@whiskeysockets/baileys');
 const { pairingBridge } = require('./lib/pairingBridge');
+const { SESSION_ROOT } = require('./lib/storagePaths');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const PORT = Number(process.env.COMPANION_PORT || process.env.PAIRING_SERVER_PORT || 3100);
-const SESSION_ROOT = path.join(process.cwd(), 'sessions');
 const SESSION_INDEX_FILE = path.join(SESSION_ROOT, 'index.json');
 const logger = pino({ level: process.env.LOG_LEVEL || 'silent' });
 const sockets = new Map();
@@ -7192,14 +7226,11 @@ function clearReconnect(phone) {
   }
 }
 
-async function destroySocket(phone, { logout = false } = {}) {
+async function destroySocket(phone) {
   const normalized = normalizePhone(phone);
   const existing = sockets.get(normalized);
   if (!existing) return;
   sockets.delete(normalized);
-  if (logout) {
-    try { await existing.logout?.(); } catch (_) {}
-  }
   try { existing.ws?.close?.(); } catch (_) {}
   try { existing.end?.(); } catch (_) {}
   try { pairingBridge.releaseSocket(normalized); } catch (_) {}
@@ -7595,6 +7626,7 @@ def ensure_embedded_companion_files(base_dir: Optional[Path] = None) -> dict[str
         "server.js": EMBEDDED_SERVER_JS,
         "index.html": EMBEDDED_INDEX_HTML,
         "lib/pairingBridge.js": EMBEDDED_PAIRING_BRIDGE_JS,
+        "lib/storagePaths.js": EMBEDDED_STORAGE_PATHS_JS,
     }
     protected_existing_files: set[str] = set()
     written_files: dict[str, Path] = {}
